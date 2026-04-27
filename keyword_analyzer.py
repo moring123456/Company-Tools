@@ -76,3 +76,6 @@ def run_keyword_analysis(uploaded_files, num_rank: int):
     df1 = df1.drop(columns=['关键词'])
 
     return df1
+
+def get_top_keywords(df1):
+    return df1['关键词 (数据来源于西柚找词)'].unique().tolist()

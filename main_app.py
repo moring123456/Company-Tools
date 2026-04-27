@@ -7,7 +7,8 @@ import plotly.express as px
 from fabric_cost import run_fabric_calculation
 from shipping_cost import run_shipping_calculation
 from return_analyzer import run_return_analysis
-from keyword_analyzer import run_keyword_analysis
+from keyword_analyzer import run_keyword_analysis, get_top_keywords
+from plotting_utils import plot_keyword_trends
 
 # 设置网页（开启 wide 宽屏模式，方便展示多个图表）
 st.set_page_config(page_title="公司数据处理平台", layout="wide")
@@ -105,80 +106,30 @@ elif menu_choice == "📦 退货数据分析":
 # ----------------------------------------
 elif menu_choice == "📈 搜索词趋势分析":
     st.header("西柚搜索词流量趋势可视化")
-    st.write("请上传西柚搜索词的 Excel 文件，文件名必须为 `YYYY-MM.xlsx` 格式（如 2025-01.xlsx）")
-
-    # 控制参数区
-    st.markdown("### ⚙️ 仪表盘设置")
-    col_param1, col_param2 = st.columns(2)
-    with col_param1:
-        Num_Rank = st.slider("🏆 提取流量排名前 N 的关键词 (Num_Rank)", min_value=5, max_value=100, value=30, step=1)
-    with col_param2:
-        maxNum_horizontal = st.slider("🪟 每行显示的图表数量 (maxNum_horizontal)", min_value=1, max_value=4, value=2,
-                                      step=1)
-
-    # 文件上传区
-    uploaded_files = st.file_uploader("点击此处批量上传 Excel 数据表", type=["xlsx"], accept_multiple_files=True)
-
+    Num_Rank = st.slider("🏆 关键词排名数", 5, 100, 30)
+    maxNum_horizontal = st.slider("🪟 每行图表数", 1, 4, 2)
+    uploaded_files = st.file_uploader("批量上传 Excel", type=["xlsx"], accept_multiple_files=True)
     if uploaded_files:
-        if st.button("🚀 生成数据大屏"):
-            with st.spinner("正在清洗数据并绘制图表..."):
+        if st.button("🚀 生成趋势图"):
+            with st.spinner("绘图中..."):
                 try:
-                    # 获取清洗后的数据 df1
                     df1 = run_keyword_analysis(uploaded_files, Num_Rank)
-                    st.success(f"🎉 成功提取排名前 {Num_Rank} 的关键词！")
-
-                    # ---- 开始绘制图表 ----
-                    st.markdown("### 📊 关键词流量趋势折线图")
-
-                    # 获取去重并按排名排序好的关键词列表
-                    keywords = df1['关键词 (数据来源于西柚找词)'].unique()
-
-                    # 动态创建指定数量的列
+                    st.success(f"成功提取排名前 {Num_Rank} 关键词数据")
+                    keywords = get_top_keywords(df1)
                     cols = st.columns(maxNum_horizontal)
-
-                    # 遍历每一个关键词，分配到对应的列中
                     for i, kw in enumerate(keywords):
-                        col = cols[i % maxNum_horizontal]  # 取余数，实现循环分配到每一列
-
-                        # 过滤当前关键词的数据
+                        col = cols[i % maxNum_horizontal]
                         kw_data = df1[df1['关键词 (数据来源于西柚找词)'] == kw].copy()
-                        # 确保月份排序正确 (01, 02, 03...)
-                        kw_data = kw_data.sort_values('月份')
-
-                        # 使用 Plotly 绘制多线图
-                        fig = px.line(
-                            kw_data,
-                            x="月份",
-                            y="流量占比",
-                            color="年份",  # 颜色按年份区分（有几年画几条线）
-                            title=f"#{i + 1} {kw}",
-                            markers=True  # 显示折线上的数据点
-                        )
-
-                        # 优化图表显示
-                        fig.update_layout(
-                            xaxis_title="月份",
-                            yaxis_title="流量占比",
-                            yaxis_tickformat='.2%',  # Y轴显示为百分比
-                            xaxis_type='category',  # 确保月份被当作类别而不是连续数字
-                            margin=dict(l=20, r=20, t=40, b=20),
-                            height=350
-                        )
-
-                        # 在对应的列展示图表
+                        fig = plot_keyword_trends(kw_data, kw)
                         col.plotly_chart(fig, use_container_width=True)
-
-                    # 提供基础数据下载
-                    st.markdown("### 💾 源数据下载")
+                    # 下载数据
                     output = io.BytesIO()
                     with pd.ExcelWriter(output, engine='openpyxl') as writer:
                         df1.to_excel(writer, sheet_name='Top关键词趋势数据', index=False)
                     output.seek(0)
-                    st.download_button("📥 下载清洗后的数据表", data=output, file_name="搜索词分析结果.xlsx",
-                                       mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-
+                    st.download_button("📥 下载分析数据", data=output, file_name="搜索词分析结果.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
                 except Exception as e:
-                    st.error(f"❌ 分析过程中发生错误：{str(e)}")
+                    st.error(f"绘图失败：{str(e)}")
 
 # ----------------------------------------
 # 工具5：排料计算
