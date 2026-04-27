@@ -1,16 +1,15 @@
 import streamlit as st
 import pandas as pd
 import io
-import plotly.express as px
 
-# 导入你的四位“大厨”
+# 导入你的几位“后台大厨”
 from fabric_cost import run_fabric_calculation
 from shipping_cost import run_shipping_calculation
 from return_analyzer import run_return_analysis
-from keyword_analyzer import run_keyword_analysis, get_top_keywords
-from plotting_utils import plot_keyword_trends
+from keyword_analyzer import run_keyword_analysis
+# 引入我们刚刚新建的“画图大厨”
+from visualizer import create_keyword_trend_fig
 
-# 设置网页（开启 wide 宽屏模式，方便展示多个图表）
 st.set_page_config(page_title="公司数据处理平台", layout="wide")
 st.title("📊 自动化计算工具平台")
 
@@ -102,34 +101,63 @@ elif menu_choice == "📦 退货数据分析":
                     st.error(f"❌ 错误：{str(e)}")
 
 # ----------------------------------------
-# 工具4：搜索词趋势分析 (带数据可视化)
+# 工具4：搜索词趋势分析 (彻底分离了画图逻辑)
 # ----------------------------------------
 elif menu_choice == "📈 搜索词趋势分析":
     st.header("西柚搜索词流量趋势可视化")
-    Num_Rank = st.slider("🏆 关键词排名数", 5, 100, 30)
-    maxNum_horizontal = st.slider("🪟 每行图表数", 1, 4, 2)
-    uploaded_files = st.file_uploader("批量上传 Excel", type=["xlsx"], accept_multiple_files=True)
+    st.write("请上传西柚搜索词的 Excel 文件，支持命名格式如 `202501.xlsx` 或 `2025-01.xlsx`")
+
+    # 控制参数区
+    st.markdown("### ⚙️ 仪表盘设置")
+    col_param1, col_param2 = st.columns(2)
+    with col_param1:
+        Num_Rank = st.slider("🏆 提取流量排名前 N 的关键词", min_value=5, max_value=100, value=30, step=1)
+    with col_param2:
+        maxNum_horizontal = st.slider("🪟 每行显示的图表数量", min_value=1, max_value=4, value=2, step=1)
+
+    # 文件上传区
+    uploaded_files = st.file_uploader("点击此处批量上传 Excel 数据表", type=["xlsx"], accept_multiple_files=True)
+
     if uploaded_files:
-        if st.button("🚀 生成趋势图"):
-            with st.spinner("绘图中..."):
+        if st.button("🚀 生成数据大屏"):
+            with st.spinner("正在清洗数据并绘制图表..."):
                 try:
+                    # 1. 调用数据处理脚本，获取 dataframe
                     df1 = run_keyword_analysis(uploaded_files, Num_Rank)
-                    st.success(f"成功提取排名前 {Num_Rank} 关键词数据")
-                    keywords = get_top_keywords(df1)
+                    st.success(f"🎉 成功提取排名前 {Num_Rank} 的关键词！")
+
+                    st.markdown("### 📊 关键词流量趋势折线图")
+
+                    keywords = df1['关键词 (数据来源于西柚找词)'].unique()
+
+                    # 2. 动态创建 Streamlit 的展示列
                     cols = st.columns(maxNum_horizontal)
+
+                    # 3. 循环遍历关键词，调用单独的画图模块生成图表
                     for i, kw in enumerate(keywords):
+                        # 获取当前列的位置
                         col = cols[i % maxNum_horizontal]
+
+                        # 取出单个关键词的数据
                         kw_data = df1[df1['关键词 (数据来源于西柚找词)'] == kw].copy()
-                        fig = plot_keyword_trends(kw_data, kw)
+
+                        # 调用 visualizer.py 中的绘图函数，代码解耦，非常清爽
+                        fig = create_keyword_trend_fig(kw_data, f"#{i + 1} {kw}")
+
+                        # 将图表放入当前列
                         col.plotly_chart(fig, use_container_width=True)
-                    # 下载数据
+
+                    # 提供下载
+                    st.markdown("### 💾 源数据下载")
                     output = io.BytesIO()
                     with pd.ExcelWriter(output, engine='openpyxl') as writer:
                         df1.to_excel(writer, sheet_name='Top关键词趋势数据', index=False)
                     output.seek(0)
-                    st.download_button("📥 下载分析数据", data=output, file_name="搜索词分析结果.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                    st.download_button("📥 下载清洗后的数据表", data=output, file_name="搜索词分析结果.xlsx",
+                                       mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
                 except Exception as e:
-                    st.error(f"绘图失败：{str(e)}")
+                    st.error(f"❌ 分析过程中发生错误：{str(e)}")
 
 # ----------------------------------------
 # 工具5：排料计算
