@@ -1,20 +1,16 @@
 import plotly.express as px
 
-
 def create_keyword_trend_fig(kw_data, keyword_name):
     """
     绘制单个关键词的流量占比趋势折线图
-
-    参数:
-    kw_data (DataFrame): 单个关键词的数据，需包含 '月份', '年份', '流量占比'
-    keyword_name (str): 关键词名称
+    确保x轴月份严格从01到12升序排列
     """
-    # 保证月份是字符串，避免 1 和 01 混乱
     kw_data = kw_data.copy()
+    # 确保月份字符串格式，补零
     kw_data['月份'] = kw_data['月份'].astype(str).str.zfill(2)
     kw_data['年份'] = kw_data['年份'].astype(str)
 
-    # 排序，保证折线连接顺序正常
+    # 排序确保数据点顺序正确
     kw_data = kw_data.sort_values(['年份', '月份'])
 
     fig = px.line(
@@ -26,11 +22,18 @@ def create_keyword_trend_fig(kw_data, keyword_name):
         title=keyword_name
     )
 
+    # 固定月份顺序，橫坐标类别顺序严格从01到12
+    month_order = [f"{m:02d}" for m in range(1, 13)]
+
+    fig.update_xaxes(
+        categoryorder='array',
+        categoryarray=month_order,
+        title_text='月份'
+    )
+
     fig.update_layout(
-        xaxis_title='月份',
         yaxis_title='流量占比',
         yaxis_tickformat='.2%',
-        xaxis_type='category',
         margin=dict(l=20, r=20, t=40, b=20),
         height=360,
         legend_title='年份'
