@@ -99,11 +99,9 @@ elif menu_choice == "📦 退货数据分析":
                     )
                 except Exception as e:
                     st.error(f"❌ 错误：{str(e)}")
-
 elif menu_choice == "📈 搜索词趋势分析":
     st.header("西柚搜索词流量趋势可视化")
     st.write("请上传西柚搜索词的 Excel 文件，支持命名格式如 `202501.xlsx` 或 `2025-01.xlsx`")
-
     st.markdown("### ⚙️ 仪表盘设置")
     col_param1, col_param2 = st.columns(2)
     with col_param1:
@@ -122,31 +120,33 @@ elif menu_choice == "📈 搜索词趋势分析":
             value=2,
             step=1
         )
-
     uploaded_files = st.file_uploader(
         "点击此处批量上传 Excel 数据表",
         type=["xlsx", "xls"],
         accept_multiple_files=True
     )
-
     if uploaded_files:
         if st.button("🚀 生成数据大屏"):
             with st.spinner("正在清洗数据并绘制图表..."):
                 try:
                     df2 = run_keyword_analysis(uploaded_files, threshold_Rank)
                     st.success(f"🎉 成功提取每个月流量占比前 {threshold_Rank} 的关键词并生成分析数据！")
-
                     st.markdown("### 📊 关键词流量趋势折线图")
-                    keywords = df2['关键词 (数据来源于西柚找词)'].dropna().astype(str).unique()
-
+                    # 1. 聚合计算每个关键词的 流量占比 总和作为排序依据
+                    kw_rank = (
+                        df2.groupby('关键词 (数据来源于西柚找词)')['流量占比']
+                        .sum()
+                        .sort_values(ascending=False)
+                    )
+                    # 2. 按流量占比倒序取关键词，不含空值
+                    keywords = kw_rank.index.dropna().astype(str).tolist()
                     cols = st.columns(maxNum_horizontal)
-
+                    # 3. 按关键词排序循环绘图
                     for i, kw in enumerate(keywords):
                         col = cols[i % maxNum_horizontal]
                         kw_data = df2[df2['关键词 (数据来源于西柚找词)'].astype(str) == kw].copy()
                         fig = create_keyword_trend_fig(kw_data, f"#{i+1} {kw}")
                         col.plotly_chart(fig, use_container_width=True)
-
                     st.markdown("### 💾 源数据下载")
                     output = io.BytesIO()
                     with pd.ExcelWriter(output, engine='openpyxl') as writer:
@@ -158,9 +158,9 @@ elif menu_choice == "📈 搜索词趋势分析":
                         file_name="搜索词分析结果.xlsx",
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                     )
-
                 except Exception as e:
                     st.error(f"❌ 分析过程中发生错误：{str(e)}")
+
 
 elif menu_choice == "✂️ 排料计算 (开发中)":
     st.info("排料计算功能工程师正在熬夜开发中，敬请期待...")
