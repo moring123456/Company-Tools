@@ -6,7 +6,7 @@ from fabric_cost import run_fabric_calculation
 from shipping_cost import run_shipping_calculation
 from return_analyzer import run_return_analysis
 from keyword_analyzer import run_keyword_analysis
-from visualizer import create_keyword_trend_fig
+from visualizer import create_keyword_trend_fig, prepare_color_sales_data, create_color_sales_fig
 
 st.set_page_config(page_title="公司数据处理平台", layout="wide")
 st.title("📊 自动化计算工具平台")
@@ -14,7 +14,7 @@ st.title("📊 自动化计算工具平台")
 st.sidebar.title("工具菜单")
 menu_choice = st.sidebar.radio(
     "请选择你需要使用的功能：",
-    ["🧵 布料费用计算", "🚚 运费计算", "📦 退货数据分析", "📈 搜索词趋势分析", "✂️ 排料计算 (开发中)"]
+    ["🧵 布料费用计算", "🚚 运费计算", "📦 退货数据分析", "📊 数据可视化", "✂️ 排料计算 (开发中)"]
 )
 
 if menu_choice == "🧵 布料费用计算":
@@ -99,67 +99,138 @@ elif menu_choice == "📦 退货数据分析":
                     )
                 except Exception as e:
                     st.error(f"❌ 错误：{str(e)}")
-elif menu_choice == "📈 搜索词趋势分析":
-    st.header("西柚搜索词流量趋势可视化")
-    st.write("请上传西柚搜索词的 Excel 文件，支持命名格式如 `202501.xlsx` 或 `2025-01.xlsx`")
-    st.markdown("### ⚙️ 仪表盘设置")
-    col_param1, col_param2 = st.columns(2)
-    with col_param1:
-        threshold_Rank = st.slider(
-            "🏆 提取每个月流量占比前 N 的关键词",
-            min_value=1,
-            max_value=100,
-            value=30,
-            step=1
-        )
-    with col_param2:
-        maxNum_horizontal = st.slider(
-            "🪟 每行显示的图表数量",
-            min_value=1,
-            max_value=4,
-            value=2,
-            step=1
-        )
-    uploaded_files = st.file_uploader(
-        "点击此处批量上传 Excel 数据表",
-        type=["xlsx", "xls"],
-        accept_multiple_files=True
+elif menu_choice == "📊 数据可视化":
+    st.header("数据可视化")
+    visualization_choice = st.sidebar.radio(
+        "请选择可视化类型：",
+        ["流量占比可视化", "颜色销量可视化"]
     )
-    if uploaded_files:
-        if st.button("🚀 生成数据大屏"):
-            with st.spinner("正在清洗数据并绘制图表..."):
-                try:
-                    df2 = run_keyword_analysis(uploaded_files, threshold_Rank)
-                    st.success(f"🎉 成功提取每个月流量占比前 {threshold_Rank} 的关键词并生成分析数据！")
-                    st.markdown("### 📊 关键词流量趋势折线图")
-                    # 1. 聚合计算每个关键词的 流量占比 总和作为排序依据
-                    kw_rank = (
-                        df2.groupby('关键词 (数据来源于西柚找词)')['流量占比']
-                        .sum()
-                        .sort_values(ascending=False)
-                    )
-                    # 2. 按流量占比倒序取关键词，不含空值
-                    keywords = kw_rank.index.dropna().astype(str).tolist()
-                    cols = st.columns(maxNum_horizontal)
-                    # 3. 按关键词排序循环绘图
-                    for i, kw in enumerate(keywords):
-                        col = cols[i % maxNum_horizontal]
-                        kw_data = df2[df2['关键词 (数据来源于西柚找词)'].astype(str) == kw].copy()
-                        fig = create_keyword_trend_fig(kw_data, f"#{i+1} {kw}")
-                        col.plotly_chart(fig, use_container_width=True)
-                    st.markdown("### 💾 源数据下载")
-                    output = io.BytesIO()
-                    with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                        df2.to_excel(writer, sheet_name='Top关键词趋势数据', index=False)
-                    output.seek(0)
-                    st.download_button(
-                        "📥 下载清洗后的数据表",
-                        data=output,
-                        file_name="搜索词分析结果.xlsx",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                    )
-                except Exception as e:
-                    st.error(f"❌ 分析过程中发生错误：{str(e)}")
+
+    if visualization_choice == "流量占比可视化":
+        st.subheader("西柚搜索词流量趋势可视化")
+        st.write("请上传西柚搜索词的 Excel 文件，支持命名格式如 `202501.xlsx` 或 `2025-01.xlsx`")
+        st.markdown("### ⚙️ 仪表盘设置")
+        col_param1, col_param2 = st.columns(2)
+        with col_param1:
+            threshold_Rank = st.slider(
+                "🏆 提取每个月流量占比前 N 的关键词",
+                min_value=1,
+                max_value=100,
+                value=30,
+                step=1
+            )
+        with col_param2:
+            maxNum_horizontal = st.slider(
+                "🪟 每行显示的图表数量",
+                min_value=1,
+                max_value=4,
+                value=2,
+                step=1
+            )
+        uploaded_files = st.file_uploader(
+            "点击此处批量上传 Excel 数据表",
+            type=["xlsx", "xls"],
+            accept_multiple_files=True,
+            key="keyword_visualizer_files"
+        )
+        if uploaded_files:
+            if st.button("🚀 生成数据大屏", key="generate_keyword_visualizer"):
+                with st.spinner("正在清洗数据并绘制图表..."):
+                    try:
+                        df2 = run_keyword_analysis(uploaded_files, threshold_Rank)
+                        st.success(f"🎉 成功提取每个月流量占比前 {threshold_Rank} 的关键词并生成分析数据！")
+                        st.markdown("### 📊 关键词流量趋势折线图")
+                        # 1. 聚合计算每个关键词的 流量占比 总和作为排序依据
+                        kw_rank = (
+                            df2.groupby('关键词 (数据来源于西柚找词)')['流量占比']
+                            .sum()
+                            .sort_values(ascending=False)
+                        )
+                        # 2. 按流量占比倒序取关键词，不含空值
+                        keywords = kw_rank.index.dropna().astype(str).tolist()
+                        cols = st.columns(maxNum_horizontal)
+                        # 3. 按关键词排序循环绘图
+                        for i, kw in enumerate(keywords):
+                            col = cols[i % maxNum_horizontal]
+                            kw_data = df2[df2['关键词 (数据来源于西柚找词)'].astype(str) == kw].copy()
+                            fig = create_keyword_trend_fig(kw_data, f"#{i+1} {kw}")
+                            col.plotly_chart(fig, use_container_width=True)
+                        st.markdown("### 💾 源数据下载")
+                        output = io.BytesIO()
+                        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                            df2.to_excel(writer, sheet_name='Top关键词趋势数据', index=False)
+                        output.seek(0)
+                        st.download_button(
+                            "📥 下载清洗后的数据表",
+                            data=output,
+                            file_name="搜索词分析结果.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                        )
+                    except Exception as e:
+                        st.error(f"❌ 分析过程中发生错误：{str(e)}")
+
+    elif visualization_choice == "颜色销量可视化":
+        st.subheader("竞品颜色销量可视化")
+        uploaded_file = st.file_uploader(
+            "点击此处上传竞品信息 Excel 数据表",
+            type=["xlsx", "xls"],
+            key="color_sales_visualizer_file"
+        )
+
+        if uploaded_file is not None:
+            try:
+                color_sales_df, color_sales_long_df = prepare_color_sales_data(uploaded_file)
+                color_count = len(color_sales_df)
+
+                if color_count == 0:
+                    st.warning("没有找到可用于展示的颜色销量数据")
+                else:
+                    st.markdown("### ⚙️ 仪表盘设置")
+                    col_param1, col_param2 = st.columns(2)
+                    with col_param1:
+                        chart_count = st.slider(
+                            "📈 图表个数",
+                            min_value=1,
+                            max_value=color_count,
+                            value=min(6, color_count),
+                            step=1
+                        )
+                    with col_param2:
+                        maxNum_horizontal = st.slider(
+                            "🪟 每行可展示的最大图表数量",
+                            min_value=1,
+                            max_value=3,
+                            value=2,
+                            step=1
+                        )
+
+                    if st.button("🚀 生成颜色销量图表", key="generate_color_sales_visualizer"):
+                        st.success(f"🎉 成功识别 {color_count} 个颜色，已按颜色总销量倒序展示前 {chart_count} 个")
+                        st.markdown("### 📊 颜色销量趋势折线图")
+
+                        selected_colors = color_sales_df.head(chart_count)
+                        cols = st.columns(maxNum_horizontal)
+                        for i, row in selected_colors.iterrows():
+                            color_name = row['颜色名称']
+                            total_sales = row['颜色总销量']
+                            color_data = color_sales_long_df[color_sales_long_df['颜色名称'] == color_name].copy()
+                            fig = create_color_sales_fig(color_data, color_name, total_sales)
+                            cols[i % maxNum_horizontal].plotly_chart(fig, use_container_width=True)
+
+                        st.markdown("### 💾 源数据下载")
+                        output = io.BytesIO()
+                        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                            color_sales_df.to_excel(writer, sheet_name='颜色销量汇总', index=False)
+                            color_sales_long_df.to_excel(writer, sheet_name='颜色销量趋势明细', index=False)
+                        output.seek(0)
+                        st.download_button(
+                            "📥 下载清洗后的数据表",
+                            data=output,
+                            file_name="竞品颜色销量分析结果.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                        )
+            except Exception as e:
+                st.error(f"❌ 分析过程中发生错误：{str(e)}")
 
 
 elif menu_choice == "✂️ 排料计算 (开发中)":
