@@ -156,6 +156,31 @@ def prepare_color_sales_data(uploaded_file):
     return color_sales_df, long_df
 
 
+def create_color_sales_pie_fig(color_sales_df):
+    """
+    创建颜色销量占比饼状图
+    展示所有颜色的销量占比分布（不受 chart_count 影响）
+    """
+    fig = px.pie(
+        color_sales_df,
+        names='颜色名称',
+        values='颜色总销量',
+        title='颜色销量占比分布'
+    )
+    fig.update_traces(
+        textposition='inside',
+        textinfo='percent+label',
+        textfont_size=10
+    )
+    fig.update_layout(
+        margin=dict(l=20, r=20, t=40, b=20),
+        height=400,
+        uniformtext_minsize=8,
+        uniformtext_mode='hide'
+    )
+    return fig
+
+
 def create_color_sales_fig(color_data, color_name, total_sales):
     fig = px.line(
         color_data.sort_values('月份'),

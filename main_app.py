@@ -6,7 +6,7 @@ from fabric_cost import run_fabric_calculation
 from shipping_cost import run_shipping_calculation
 from return_analyzer import run_return_analysis
 from keyword_analyzer import run_keyword_analysis
-from visualizer import create_keyword_trend_fig, prepare_color_sales_data, create_color_sales_fig
+from visualizer import create_keyword_trend_fig, prepare_color_sales_data, create_color_sales_fig, create_color_sales_pie_fig
 
 st.set_page_config(page_title="公司数据处理平台", layout="wide")
 st.title("📊 自动化计算工具平台")
@@ -202,6 +202,31 @@ elif menu_choice == "📊 数据可视化":
                             max_value=3,
                             value=2,
                             step=1
+                        )
+
+                    # ===== 预览板块：饼状图 + 销量排名表 =====
+                    st.markdown("### 👀 数据预览")
+
+                    preview_col1, preview_col2 = st.columns(2)
+                    with preview_col1:
+                        pie_fig = create_color_sales_pie_fig(color_sales_df)
+                        preview_col1.plotly_chart(pie_fig, use_container_width=True)
+
+                    with preview_col2:
+                        ranking_df = (
+                            color_sales_df[['颜色名称', '颜色总销量']]
+                            .head(chart_count)
+                            .reset_index(drop=True)
+                        )
+                        ranking_df.index = ranking_df.index + 1  # 序号从 1 开始
+                        ranking_df = ranking_df.rename(columns={'颜色总销量': '颜色销量'})
+                        st.dataframe(
+                            ranking_df,
+                            use_container_width=True,
+                            column_config={
+                                "颜色名称": "颜色名称",
+                                "颜色销量": st.column_config.NumberColumn("颜色销量", format="%d")
+                            }
                         )
 
                     if st.button("🚀 生成颜色销量图表", key="generate_color_sales_visualizer"):
