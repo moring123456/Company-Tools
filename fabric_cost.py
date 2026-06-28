@@ -372,7 +372,7 @@ class FabricCostCalculator:
                 for _, backup_row in style_backup.iterrows():
                     backup_records.append({
                         '产品名称': backup_row['产品名称'], '颜色&色号': backup_row['颜色&色号'],
-                        '订单编号': backup_row['订单编号'] + '_备布',
+                        '订单编号': str(backup_row['订单编号']) + '_备布',
                         '布料送货数量（匹）': backup_row['布料送货数量（匹）'],
                         '金额（元）': backup_row['金额（元）'], '下单数量': 0, '已收货数量': backup_row['已收货数量']
                     })
