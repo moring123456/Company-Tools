@@ -207,6 +207,7 @@ class FabricCostCalculator:
     def build_df1_2(self, df1_1: pd.DataFrame) -> pd.DataFrame:
         df1_1['已收货数量'] = pd.to_numeric(df1_1['已收货数量'], errors='coerce')
         df1_1['下单数量'] = pd.to_numeric(df1_1['下单数量'], errors='coerce')
+        df1_1['布料送货数量（匹）'] = pd.to_numeric(df1_1['布料送货数量（匹）'], errors='coerce')
         df1_2 = df1_1[df1_1['已收货数量'].notna()].copy()
         df1_2 = df1_2[df1_2['已收货数量'] > 0]
         df1_2 = df1_2[df1_2['已收货数量'] >= df1_2['下单数量'] * 0.70]
