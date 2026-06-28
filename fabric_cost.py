@@ -75,7 +75,8 @@ class FabricCostCalculator:
         if pd.isna(color_str):
             return None
         color_str = str(color_str).strip()
-        match = re.search(r'(YH\w+)', color_str)
+        # 匹配 YH 编码，支持含点号格式（如 YH9.707）
+        match = re.search(r'(YH[\d.]+)', color_str)
         if match:
             return match.group(1)
         return None
@@ -148,26 +149,35 @@ class FabricCostCalculator:
         order_df['颜色名称'] = order_df['颜色'].apply(self.extract_color_name)
         order_df['颜色编号'] = order_df['颜色'].apply(self.extract_color_number)
         order_df['印花色号'] = order_df['颜色'].apply(self.extract_print_code)
+        # 规范化订单编号：去掉点号，统一格式
+        order_df['订单编号_clean'] = order_df['订单编号'].astype(str).str.replace('.', '', regex=False)
 
         for idx, row in df1.iterrows():
             order_no = row['订单编号']
             product_name = row['产品名称']
             color_code = row['颜色&色号']
             normalized_color = self.normalize_color_for_matching(color_code)
+            # 布料跟踪表的订单编号也去掉点号
+            order_no_clean = str(order_no).replace('.', '')
 
             if self.is_solid(product_name):
                 color_name = self.extract_color_name(color_code)
-                matched_orders = order_df[(order_df['订单编号'] == order_no) & (order_df['颜色名称'] == color_name)]
+                matched_orders = order_df[(order_df['订单编号_clean'] == order_no_clean) & (order_df['颜色名称'] == color_name)]
                 if len(matched_orders) == 0:
                     color_number = self.extract_color_number(color_code)
                     if color_number:
                         matched_orders = order_df[
-                            (order_df['订单编号'] == order_no) & (order_df['颜色编号'] == color_number)]
+                            (order_df['订单编号_clean'] == order_no_clean) & (order_df['颜色编号'] == color_number)]
             elif self.is_print(product_name):
                 print_code = self.extract_print_code(color_code)
-                matched_orders = order_df[(order_df['订单编号'] == order_no) & (order_df['印花色号'] == print_code)]
+                matched_orders = order_df[(order_df['订单编号_clean'] == order_no_clean) & (order_df['印花色号'] == print_code)]
+                # 回退策略：印花编码匹配失败时，尝试按颜色名称回退匹配
+                if len(matched_orders) == 0:
+                    color_name = self.extract_color_name(color_code)
+                    if color_name:
+                        matched_orders = order_df[(order_df['订单编号_clean'] == order_no_clean) & (order_df['颜色名称'] == color_name)]
             else:
-                matched_orders = order_df[(order_df['订单编号'] == order_no) & (order_df['颜色'] == normalized_color)]
+                matched_orders = order_df[(order_df['订单编号_clean'] == order_no_clean) & (order_df['颜色'] == normalized_color)]
 
             if len(matched_orders) > 0:
                 df1.at[idx, '下单数量'] = matched_orders['下单数量'].sum()
