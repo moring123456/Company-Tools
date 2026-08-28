@@ -8,13 +8,16 @@ from return_analyzer import run_return_analysis
 from keyword_analyzer import run_keyword_analysis
 from visualizer import create_keyword_trend_fig, prepare_color_sales_data, create_color_sales_fig, create_color_sales_pie_fig
 
+# --- 新增模块：采购单自动化生成（v1.5）---
+from purchase_order_generator.ui import render_purchase_order_page
+
 st.set_page_config(page_title="公司数据处理平台", layout="wide")
 st.title("📊 自动化计算工具平台")
 
 st.sidebar.title("工具菜单")
 menu_choice = st.sidebar.radio(
     "请选择你需要使用的功能：",
-    ["🧵 布料费用计算", "🚚 运费计算", "📦 退货数据分析", "📊 数据可视化", "✂️ 排料计算 (开发中)"]
+    ["🧵 布料费用计算", "🚚 运费计算", "📦 退货数据分析", "📊 数据可视化", "✂️ 排料计算 (开发中)", "📋 采购单自动化生成"]
 )
 
 if menu_choice == "🧵 布料费用计算":
@@ -260,3 +263,9 @@ elif menu_choice == "📊 数据可视化":
 
 elif menu_choice == "✂️ 排料计算 (开发中)":
     st.info("排料计算功能工程师正在熬夜开发中，敬请期待...")
+
+
+# --- 新增模块：采购单自动化生成 ---
+elif menu_choice == "📋 采购单自动化生成":
+    st.header("采购单自动化生成")
+    render_purchase_order_page()

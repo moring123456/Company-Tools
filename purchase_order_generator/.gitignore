@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# 生成物
+output/
+*.zip
+
+# 模板（含业务数据，如要公开部署请保留此忽略项，自行放置模板）
+templates/*.xlsx
+!templates/images/
+
+# 系统
+.DS_Store
+Thumbs.db
