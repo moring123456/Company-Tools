@@ -227,7 +227,8 @@ def split(data: InputData, mixed_overrides: Dict[str, int] = None) -> SplitResul
         # 按订单数倒序排（同件数按输入顺序稳定排序）
         unit.color_rows.sort(key=lambda cr: (-cr.total, input_order.get(cr.color, 0)))
 
-        unit.sizes = sort_sizes({s for cr in unit.color_rows for s in cr.qty_by_size})
+        # 尺码固定为 S~6XL 全部 9 列（用户要求写死，不随数据变动）
+        unit.sizes = list(SIZE_ORDER)
         unit.total_qty = sum(cr.total for cr in unit.color_rows)
         unit.file_name = f"{unit.order_no}-{style} {unit.product_name} {unit.type_str} -{factory}.xlsx".replace("  ", " ")
         result.units.append(unit)
