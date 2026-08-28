@@ -130,105 +130,54 @@ def _replace_cell_images(ws, unit_images: Dict[str, bytes] = None):
         ws.add_image(nimg, f"{get_column_letter(col)}{row}")
 
 
-def _purge_data_area(ws):
-    """兜底清空 R6~R23 数据区所有单元格的值和样式（防止模板 SUMIFS 等公式污染 → #VALUE!）
-    新模板列到 O(15): A=颜色, B=包装袋规格, C~K=尺码9列, L=比例, M=总计, N=条数, O=备注"""
-    from openpyxl.styles import Border as _Border
+def _clear_data_values(ws):
+    """只清空 R8~R23 数据区的单元格值，**完全保留样式/合并/行高/列宽/边框**。
+    用户要求：格式以样板为准，只管写数据。"""
     from openpyxl.cell.cell import MergedCell
-    empty = _Border()
-    MAX_COL = 15   # O 列
-    # 1. 先解除所有包含 R6~R23 的合并（其他区域的合并保持；用 try 跳过 delete_cols 后的"幽灵"合并）
-    safe_merged = []
-    for mr in list(ws.merged_cells.ranges):
-        # 只关心跟 R6~R23 有关联的合并
-        if mr.min_row <= 23 and mr.max_row >= 6:
-            try:
-                ws.unmerge_cells(str(mr))
-            except Exception:
-                pass  # 忽略 delete_cols 后的"幽灵"合并区域
-        else:
-            safe_merged.append(str(mr))
-    # 2. 清空 R6~R23 所有单元格值（跳过 MergedCell）
-    for r in range(6, 24):
-        for c in range(1, MAX_COL + 1):
+    for r in range(8, 24):
+        for c in range(1, 16):
             cell = ws.cell(row=r, column=c)
             if isinstance(cell, MergedCell):
                 continue
             cell.value = None
-            cell.border = empty
-    # 3. 恢复 R6:R7 合并（让后续尺码表头能正常合并）
-    for col in range(1, MAX_COL + 1):
-        coord = f"{get_column_letter(col)}6:{get_column_letter(col)}7"
-        if coord not in {str(r) for r in ws.merged_cells.ranges}:
-            try:
-                ws.merge_cells(coord)
-            except Exception:
-                pass
 
 
 # ---------- 订单 sheet ----------
 
 def _build_order_sheet(wb, unit: OrderUnit):
+    """以样板为底版，**只写数据，完全不动格式**（列宽/行高/合并/边框/填充全部保留样板原样）。
+    数据区布局（样板固定）：C~K=9尺码(S~6XL), L=比例, M=总计, N=布料条数, O=备注
+    """
     ws = wb["订单"]
 
-    # 0. 只保留 A~O 列（删除 P 列后的多余区）
-    #    新模板布局: C~K=9个尺码(S~6XL), L=比例, M=总计, N=布料条数, O=备注
-    if ws.max_column > 15:
-        ws.delete_cols(16, ws.max_column - 15)
+    # 1. 只清空数据区 R8~R23 的值（保留全部格式）；表头 R6 的标签样板已有，不重写
+    _clear_data_values(ws)
 
-    # 0.5 兜底：清空整个数据区所有公式/旧值（防止模板污染 → #VALUE! / #REF!）
-    #    数据区 = R6(表头) ~ R23(原"总计"行)
-    _purge_data_area(ws)
-
-    # 2. 尺码列：模板已内置 9 列 (S~6XL)，无需插列
-    sizes = unit.sizes   # 固定 ['S','M','L','XL','2XL','3XL','4XL','5XL','6XL']
-    need_insert = 0
-
-    # 1. 头部字段
-    ws["A1"] = "生产订单"
+    # 2. 头部字段（只写值，样板已有标签/合并/样式）
     ws["B2"] = unit.style          # 款号
     ws["H2"] = unit.product_name   # 名称
     ws["B3"] = unit.order_no       # 订单号
     ws["H3"] = unit.config_brand   # 品牌
     ws["B4"] = unit.pattern        # 做货纸样编号
-    # G4 保留「店铺」标签（用户样板保留），H4 值留空
-    ws["H4"] = ""
     ws["B5"] = unit.factory        # 加工厂
     ws["H5"] = int(unit.date_str) if unit.date_str and str(unit.date_str).isdigit() else unit.date_str  # 日期（数字）
 
-    # 重写尺码表头（R6 为合并左上角，R7 是 MergedCell 不可写）
-    #    ⚠️ 模板里 A6='颜色尺码'、B6='包装袋规格'、L6='比例'、M6='总计'、N6='布料条数'、O6='备注'
-    #    也必须重写（_purge_data_area 只清 R8 起的数据行，不动 R6 表头；但若 MAX_COL
-    #    范围扩大会清到表头，需要明确写回表头标签以防模板被改后丢失）
-    HEADER_LABELS = {
-        1: "颜色尺码",
-        2: "包装袋规格",
-        12: "比例",
-        13: "总计",
-        14: "布料\n条数",
-        15: "备注",
-    }
-    for col, label in HEADER_LABELS.items():
-        ws.cell(row=6, column=col).value = label
+    # 3. 尺码表头：样板已固定 9 列 (C~K)，只写尺码名（标签/合并不动）
+    sizes = unit.sizes   # 固定 ['S','M','L','XL','2XL','3XL','4XL','5XL','6XL']
     for i, s in enumerate(sizes):
-        col = 3 + i
-        ws.cell(row=6, column=col).value = s
-    # 清理多余旧表头（仅左上角）
-    for i in range(len(sizes), 6 + need_insert):
-        col = 3 + i
-        ws.cell(row=6, column=col).value = None
+        ws.cell(row=6, column=3 + i).value = s
 
-    # 3. 数据行（R8 起）+ 汇总行（隔一行）
+    # 4. 数据行（R8 起）+ 汇总行（隔一行）
     start = 8
     n = len(unit.color_rows)
-    # 确保有足够行：THD 模板固定内容从 R24 起，数据区 R8~R23 = 16 行
-    fixed_top = 24
+    fixed_top = 24   # 样板固定内容从 R24 起，数据区 R8~R23 = 16 行
     avail = fixed_top - start
     need_rows = n + 2   # 数据行 + 空行 + 汇总行
     if need_rows > avail:
-        ws.insert_rows(start + avail, need_rows - avail)   # 在固定内容前插行
-        _shift_images_down(ws, start + avail, need_rows - avail)  # 图片随固定内容下移
-        _shift_merges_down(ws, start + avail, need_rows - avail)  # 合并区域随固定内容下移（防数据丢失）
+        # 颜色数超过容量：在固定内容前插行（必要操作），图片/合并随之下移
+        ws.insert_rows(start + avail, need_rows - avail)
+        _shift_images_down(ws, start + avail, need_rows - avail)
+        _shift_merges_down(ws, start + avail, need_rows - avail)
     for idx, cr in enumerate(unit.color_rows):
         r = start + idx
         ws.cell(row=r, column=1, value=cr.color)
@@ -239,46 +188,29 @@ def _build_order_sheet(wb, unit: OrderUnit):
         ws.cell(row=r, column=4 + len(sizes), value=cr.total)      # 总计
         ws.cell(row=r, column=5 + len(sizes), value=cr.rolls)      # 布料条数
         ws.cell(row=r, column=6 + len(sizes), value=cr.remark)     # 备注
-        # 边框
-        for c in range(1, 7 + len(sizes)):
-            cell = ws.cell(row=r, column=c)
-            border = cell.border
-            if border is None or border.left is None or not border.left.style:
-                cell.border = BOX
+        # ⚠️ 不设置边框：样板已带边框，保持原样
 
-    # 汇总行（数据行后隔一行）：总件数 + 布料总条数
-    # 先清空空行（数据行与汇总行之间的行可能残留模板公式 → 防止 #REF!)
+    # 汇总行（数据行后隔一行）：只写 总件数 + 布料总条数，其他留空
     blank_row = start + n
     for c in range(1, 7 + len(sizes)):
-        cell = ws.cell(row=blank_row, column=c)
-        cell.value = None
-        cell.border = Border()
+        ws.cell(row=blank_row, column=c).value = None   # 空行清值（保留格式）
     total_row = start + n + 1
     ws.cell(row=total_row, column=1, value="总计")
-    ws.cell(row=total_row, column=2, value="")   # 包装袋规格留空
-    # 不再写各尺码合计（按用户要求：只显示总件数 + 布料总条数）
-    ws.cell(row=total_row, column=3 + len(sizes), value="")                     # 比例留空
     ws.cell(row=total_row, column=4 + len(sizes), value=unit.total_qty)         # 总件数
     ws.cell(row=total_row, column=5 + len(sizes), value=sum(cr.rolls for cr in unit.color_rows))  # 布料总条数
-    ws.cell(row=total_row, column=6 + len(sizes), value="")                     # 备注留空
-    for c in range(1, 7 + len(sizes)):
-        cell = ws.cell(row=total_row, column=c)
-        cell.border = BOX
-    # 字体不加粗，与颜色行一致
+    # ⚠️ 其余单元格不动（样板已有边框/标签）
 
-    # 4. 洗水唛内容（THD 模板 R36 标签 / R37 内容）
+    # 5. 洗水唛内容（样板 R36 标签 / R37 内容）
     for r in range(30, min(ws.max_row, 45) + 1):
         if ws.cell(row=r, column=1).value and "洗水唛" in str(ws.cell(row=r, column=1).value):
             ws.cell(row=r + 1, column=1, value=unit.wash_label)
             break
 
-    # 5. 清空数据区残留的空白行（原模板 R8~R23 可能含公式/旧值 → 防止 #VALUE）
+    # 6. 清空数据区残留的空白行（数据行之后、固定内容之前，只清值保留格式）
     last_used_row = total_row
     for r in range(last_used_row + 1, fixed_top):
         for c in range(1, 7 + len(sizes)):
-            cell = ws.cell(row=r, column=c)
-            cell.value = None
-            cell.border = Border()
+            ws.cell(row=r, column=c).value = None
 
     # 6. 仅当输入文件/网页提供了替换图时，替换模板中对应位置的图片（模板默认图保留）
     _replace_cell_images(ws, getattr(unit, "images", None) or {})
