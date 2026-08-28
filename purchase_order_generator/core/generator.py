@@ -199,9 +199,9 @@ def _build_order_sheet(wb, unit: OrderUnit):
     ws["H5"] = int(unit.date_str) if unit.date_str and str(unit.date_str).isdigit() else unit.date_str  # 日期（数字）
 
     # 3. 表头：第 6 行固定标签 + 尺码名（只写值，不碰样式——字体/斜线边框/合并/底纹都保留样板原样）
-    #    ⚠️ A6"颜色尺码"是斜线表头（diagonalDown），样式在模板里，绝不能动样式
+    #    ⚠️ A6"颜色尺码"是斜线表头（diagonalDown），需用换行符让"颜色"靠上、"尺码"靠下
     HEADER_LABELS = {
-        1: "颜色尺码",
+        1: "颜色\n尺码",   # 斜线表头：用换行分隔，WPS 渲染时"颜色"在左上、"尺码"在右下
         2: "包装袋规格",
         12: "比例",
         13: "总计",
