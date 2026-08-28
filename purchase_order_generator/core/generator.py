@@ -151,6 +151,14 @@ def _build_order_sheet(wb, unit: OrderUnit):
     #    数据区 = R6(表头) ~ R23(原"总计"行)
     _purge_data_area(ws)
 
+    # 2. 先插列（尺码列表头 C~H 固定 6 列，>6 个尺码需插列）
+    #    ⚠️ 必须先插列再写头部：insert_cols 会把 H 列及其后的列右移，
+    #       若先写 H2/H3/H5 会被挤到 K 列（导致名称/品牌/日期丢失）
+    sizes = unit.sizes
+    need_insert = len(sizes) - 6
+    if need_insert > 0:
+        ws.insert_cols(8, need_insert)   # H 列前插
+
     # 1. 头部字段
     ws["A1"] = "生产订单"
     ws["B2"] = unit.style          # 款号
@@ -162,12 +170,6 @@ def _build_order_sheet(wb, unit: OrderUnit):
     ws["H4"] = ""
     ws["B5"] = unit.factory        # 加工厂
     ws["H5"] = unit.date_str       # 日期
-
-    # 2. 尺码列表头（C~H 固定 6 列，>6 个尺码需插列）
-    sizes = unit.sizes
-    need_insert = len(sizes) - 6
-    if need_insert > 0:
-        ws.insert_cols(8, need_insert)   # H 列前插
 
     # 2.5 比例列加宽到原来的 3 倍（用户要求：避免比例字符串被截断）
     ratio_col = 3 + len(sizes)   # 比例列索引
