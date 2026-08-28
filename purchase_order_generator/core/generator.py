@@ -71,6 +71,32 @@ def _shift_images_down(ws, start_1based: int, extra: int):
             img.anchor._from.row = r0 + extra
 
 
+def _shift_merges_down(ws, start_1based: int, extra: int):
+    """插行后把位于插行位置及其下方的合并区域整体下移 extra 行。
+    ⚠️ openpyxl insert_rows 不会自动移动合并区域，必须手动处理，
+       否则保存时新数据与旧合并区域冲突被清空（R24 后数据丢失）。"""
+    if extra <= 0:
+        return
+    affected = []
+    for mr in list(ws.merged_cells.ranges):
+        if mr.min_row >= start_1based:
+            affected.append(mr)
+    # 先解除，再按新位置重建（避免 openpyxl 合并重叠校验报错）
+    for mr in affected:
+        try:
+            ws.unmerge_cells(str(mr))
+        except Exception:
+            pass
+    for mr in affected:
+        try:
+            ws.merge_cells(
+                start_row=mr.min_row + extra, start_column=mr.min_col,
+                end_row=mr.max_row + extra, end_column=mr.max_col,
+            )
+        except Exception:
+            pass
+
+
 def _replace_cell_images(ws, unit_images: Dict[str, bytes] = None):
     """仅当输入文件/网页提供了替换图时，替换模板中对应位置的图片。
     模板里的默认图保留不动（方案2: 图已内置在净化模板中）"""
@@ -105,10 +131,12 @@ def _replace_cell_images(ws, unit_images: Dict[str, bytes] = None):
 
 
 def _purge_data_area(ws):
-    """兜底清空 R6~R23 数据区所有单元格的值和样式（防止模板 SUMIFS 等公式污染 → #VALUE!）"""
+    """兜底清空 R6~R23 数据区所有单元格的值和样式（防止模板 SUMIFS 等公式污染 → #VALUE!）
+    新模板列到 O(15): A=颜色, B=包装袋规格, C~K=尺码9列, L=比例, M=总计, N=条数, O=备注"""
     from openpyxl.styles import Border as _Border
     from openpyxl.cell.cell import MergedCell
     empty = _Border()
+    MAX_COL = 15   # O 列
     # 1. 先解除所有包含 R6~R23 的合并（其他区域的合并保持；用 try 跳过 delete_cols 后的"幽灵"合并）
     safe_merged = []
     for mr in list(ws.merged_cells.ranges):
@@ -122,14 +150,14 @@ def _purge_data_area(ws):
             safe_merged.append(str(mr))
     # 2. 清空 R6~R23 所有单元格值（跳过 MergedCell）
     for r in range(6, 24):
-        for c in range(1, 13):
+        for c in range(1, MAX_COL + 1):
             cell = ws.cell(row=r, column=c)
             if isinstance(cell, MergedCell):
                 continue
             cell.value = None
             cell.border = empty
     # 3. 恢复 R6:R7 合并（让后续尺码表头能正常合并）
-    for col in range(1, 13):
+    for col in range(1, MAX_COL + 1):
         coord = f"{get_column_letter(col)}6:{get_column_letter(col)}7"
         if coord not in {str(r) for r in ws.merged_cells.ranges}:
             try:
@@ -143,21 +171,18 @@ def _purge_data_area(ws):
 def _build_order_sheet(wb, unit: OrderUnit):
     ws = wb["订单"]
 
-    # 0. 只保留 A~L 列（删除 THD 模板 M 列后的 裁床数量/汇总 区）
-    if ws.max_column > 13:
-        ws.delete_cols(14, ws.max_column - 13)
+    # 0. 只保留 A~O 列（删除 P 列后的多余区）
+    #    新模板布局: C~K=9个尺码(S~6XL), L=比例, M=总计, N=布料条数, O=备注
+    if ws.max_column > 15:
+        ws.delete_cols(16, ws.max_column - 15)
 
     # 0.5 兜底：清空整个数据区所有公式/旧值（防止模板污染 → #VALUE! / #REF!）
     #    数据区 = R6(表头) ~ R23(原"总计"行)
     _purge_data_area(ws)
 
-    # 2. 先插列（尺码列表头 C~H 固定 6 列，>6 个尺码需插列）
-    #    ⚠️ 必须先插列再写头部：insert_cols 会把 H 列及其后的列右移，
-    #       若先写 H2/H3/H5 会被挤到 K 列（导致名称/品牌/日期丢失）
-    sizes = unit.sizes
-    need_insert = len(sizes) - 6
-    if need_insert > 0:
-        ws.insert_cols(8, need_insert)   # H 列前插
+    # 2. 尺码列：模板已内置 9 列 (S~6XL)，无需插列
+    sizes = unit.sizes   # 固定 ['S','M','L','XL','2XL','3XL','4XL','5XL','6XL']
+    need_insert = 0
 
     # 1. 头部字段
     ws["A1"] = "生产订单"
@@ -166,27 +191,15 @@ def _build_order_sheet(wb, unit: OrderUnit):
     ws["B3"] = unit.order_no       # 订单号
     ws["H3"] = unit.config_brand   # 品牌
     ws["B4"] = unit.pattern        # 做货纸样编号
-    ws["G4"] = ""                  # 去掉「店铺」标签
+    # G4 保留「店铺」标签（用户样板保留），H4 值留空
     ws["H4"] = ""
     ws["B5"] = unit.factory        # 加工厂
     ws["H5"] = unit.date_str       # 日期
 
-    # 2.5 比例列加宽到原来的 3 倍（用户要求：避免比例字符串被截断）
-    ratio_col = 3 + len(sizes)   # 比例列索引
-    ratio_col_letter = get_column_letter(ratio_col)
-    original_width = ws.column_dimensions[ratio_col_letter].width or 13.0
-    ws.column_dimensions[ratio_col_letter].width = original_width * 3
     # 重写尺码表头（R6 为合并左上角，R7 是 MergedCell 不可写）
     for i, s in enumerate(sizes):
         col = 3 + i
         ws.cell(row=6, column=col).value = s
-    # 新插入的尺码列补合并 R6:R7 保持表头样式
-    if need_insert > 0:
-        for i in range(6, 6 + need_insert):
-            col = 3 + i
-            if not any(str(r) == f"{get_column_letter(col)}6:{get_column_letter(col)}7"
-                       for r in ws.merged_cells.ranges):
-                ws.merge_cells(start_row=6, start_column=col, end_row=7, end_column=col)
     # 清理多余旧表头（仅左上角）
     for i in range(len(sizes), 6 + need_insert):
         col = 3 + i
@@ -202,6 +215,7 @@ def _build_order_sheet(wb, unit: OrderUnit):
     if need_rows > avail:
         ws.insert_rows(start + avail, need_rows - avail)   # 在固定内容前插行
         _shift_images_down(ws, start + avail, need_rows - avail)  # 图片随固定内容下移
+        _shift_merges_down(ws, start + avail, need_rows - avail)  # 合并区域随固定内容下移（防数据丢失）
     for idx, cr in enumerate(unit.color_rows):
         r = start + idx
         ws.cell(row=r, column=1, value=cr.color)
