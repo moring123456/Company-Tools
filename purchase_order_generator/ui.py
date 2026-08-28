@@ -10,6 +10,9 @@ import tempfile
 
 import pandas as pd
 import streamlit as st
+import openpyxl
+from openpyxl.utils import get_column_letter
+from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 
 # 双兼容导入：平台集成(包上下文) / 独立运行(脚本目录)
 try:
@@ -28,6 +31,61 @@ except ImportError:
 _SELF_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
+def _generate_input_template() -> bytes:
+    """生成空输入模板的 xlsx 字节，供下载"""
+    wb = openpyxl.Workbook()
+    thin = Side(style='thin')
+    border = Border(left=thin, right=thin, top=thin, bottom=thin)
+    hdr_font = Font(bold=True)
+    hdr_fill = PatternFill('solid', fgColor='D9E1F2')
+    hdr_align = Alignment(horizontal='center', vertical='center', wrap_text=True)
+
+    # Sheet1 主表
+    ws1 = wb.active
+    ws1.title = '主表'
+    ws1.append(['款号', 'SKU编码', 'SKU名称', '颜色', '尺码', '采购数', '工厂', '布行', '品名', '备注'])
+    for cell in ws1[1]:
+        cell.font = hdr_font
+        cell.fill = hdr_fill
+        cell.alignment = hdr_align
+        cell.border = border
+    for c, w in enumerate([10, 20, 25, 18, 8, 10, 10, 15, 12, 15], 1):
+        ws1.column_dimensions[get_column_letter(c)].width = w
+    # 示例行
+    ws1.append(['PPY0076A', 'PPY0076A-BK-XL', 'PPY 打揽七分裤 黑色 XL', '黑色', 'XL', 60, '宏裕', '宏裕', '牛奶丝', ''])
+    ws1.append(['PPY4003', 'PPY4003-PK-M', 'PPY 睡衣套装 粉色 M', '粉色', 'M', 100, '剑邑', '剑邑', '卫衣布', ''])
+
+    # Sheet2 面料表
+    ws2 = wb.create_sheet('面料表')
+    ws2.append(['款号', '产品名称', '品名', '纸样名称', '洗水唛成分', '每条布出货数(件)', '是否需要压缩袋', '包装袋规格'])
+    for cell in ws2[1]:
+        cell.font = hdr_font
+        cell.fill = hdr_fill
+        cell.alignment = hdr_align
+        cell.border = border
+    for c, w in enumerate([10, 15, 12, 15, 20, 18, 16, 14], 1):
+        ws2.column_dimensions[get_column_letter(c)].width = w
+    ws2.append(['PPY0076A', '打揽七分裤', '牛奶丝', '七分裤A', '100%聚酯纤维', 40, '否', '40×50'])
+    ws2.append(['PPY4003', '睡衣套装', '卫衣布', '睡衣套装03', '65%棉 35%聚酯纤维', 30, '是', '50×60'])
+
+    # Sheet3 配置表
+    ws3 = wb.create_sheet('配置表')
+    ws3.append(['配置项', '值'])
+    for cell in ws3[1]:
+        cell.font = hdr_font
+        cell.fill = hdr_fill
+        cell.alignment = hdr_align
+        cell.border = border
+    ws3.column_dimensions['A'].width = 12
+    ws3.column_dimensions['B'].width = 40
+    for item in ['品牌', '账号代码', '申请人', '联系地址', '采购仓库']:
+        ws3.append([item, ''])
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
 def render_purchase_order_page():
     """采购单自动生成模块主界面（不含 set_page_config/title，避免与平台冲突）"""
     st.caption("朗晨 PPY 采购单批量生成 · 输入 1 文件 3 工作表（主表 / 面料表 / 配置表）→ 输出 按款×工厂 拆分 + 每布行一张申购单")
@@ -44,16 +102,17 @@ def render_purchase_order_page():
     st.subheader("1️⃣ 上传输入文件")
     uploaded = st.file_uploader("选择 .xlsx 输入文件", type=["xlsx"])
 
-    # 样本输入文件下载（供参考/复制填写）
-    _sample_path = os.path.join(_SELF_DIR, "output", "PPY采购-20260827_测试输入.xlsx")
-    if os.path.exists(_sample_path):
-        with open(_sample_path, "rb") as _f:
-            st.download_button(
-                label="📄 下载样本输入文件（参考格式）",
-                data=_f.read(),
-                file_name="PPY采购-样本输入.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            )
+    # 动态生成空输入模板供下载（不依赖本地文件）
+    col_up, col_dl = st.columns([3, 1])
+    with col_dl:
+        _tpl_bytes = _generate_input_template()
+        st.download_button(
+            label="📄 下载空输入模板",
+            data=_tpl_bytes,
+            file_name="采购单输入模板.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            help="下载空模板，按格式填写后上传即可",
+        )
 
     if uploaded is not None and uploaded.name != st.session_state.uploaded_name:
         st.session_state.uploaded_name = uploaded.name
