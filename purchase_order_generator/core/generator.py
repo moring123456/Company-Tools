@@ -104,6 +104,40 @@ def _replace_cell_images(ws, unit_images: Dict[str, bytes] = None):
         ws.add_image(nimg, f"{get_column_letter(col)}{row}")
 
 
+def _purge_data_area(ws):
+    """兜底清空 R6~R23 数据区所有单元格的值和样式（防止模板 SUMIFS 等公式污染 → #VALUE!）"""
+    from openpyxl.styles import Border as _Border
+    from openpyxl.cell.cell import MergedCell
+    empty = _Border()
+    # 1. 先解除所有包含 R6~R23 的合并（其他区域的合并保持；用 try 跳过 delete_cols 后的"幽灵"合并）
+    safe_merged = []
+    for mr in list(ws.merged_cells.ranges):
+        # 只关心跟 R6~R23 有关联的合并
+        if mr.min_row <= 23 and mr.max_row >= 6:
+            try:
+                ws.unmerge_cells(str(mr))
+            except Exception:
+                pass  # 忽略 delete_cols 后的"幽灵"合并区域
+        else:
+            safe_merged.append(str(mr))
+    # 2. 清空 R6~R23 所有单元格值（跳过 MergedCell）
+    for r in range(6, 24):
+        for c in range(1, 13):
+            cell = ws.cell(row=r, column=c)
+            if isinstance(cell, MergedCell):
+                continue
+            cell.value = None
+            cell.border = empty
+    # 3. 恢复 R6:R7 合并（让后续尺码表头能正常合并）
+    for col in range(1, 13):
+        coord = f"{get_column_letter(col)}6:{get_column_letter(col)}7"
+        if coord not in {str(r) for r in ws.merged_cells.ranges}:
+            try:
+                ws.merge_cells(coord)
+            except Exception:
+                pass
+
+
 # ---------- 订单 sheet ----------
 
 def _build_order_sheet(wb, unit: OrderUnit):
@@ -112,6 +146,10 @@ def _build_order_sheet(wb, unit: OrderUnit):
     # 0. 只保留 A~L 列（删除 THD 模板 M 列后的 裁床数量/汇总 区）
     if ws.max_column > 13:
         ws.delete_cols(14, ws.max_column - 13)
+
+    # 0.5 兜底：清空整个数据区所有公式/旧值（防止模板污染 → #VALUE! / #REF!）
+    #    数据区 = R6(表头) ~ R23(原"总计"行)
+    _purge_data_area(ws)
 
     # 1. 头部字段
     ws["A1"] = "生产订单"
@@ -130,6 +168,12 @@ def _build_order_sheet(wb, unit: OrderUnit):
     need_insert = len(sizes) - 6
     if need_insert > 0:
         ws.insert_cols(8, need_insert)   # H 列前插
+
+    # 2.5 比例列加宽到原来的 3 倍（用户要求：避免比例字符串被截断）
+    ratio_col = 3 + len(sizes)   # 比例列索引
+    ratio_col_letter = get_column_letter(ratio_col)
+    original_width = ws.column_dimensions[ratio_col_letter].width or 13.0
+    ws.column_dimensions[ratio_col_letter].width = original_width * 3
     # 重写尺码表头（R6 为合并左上角，R7 是 MergedCell 不可写）
     for i, s in enumerate(sizes):
         col = 3 + i
@@ -169,7 +213,8 @@ def _build_order_sheet(wb, unit: OrderUnit):
         # 边框
         for c in range(1, 7 + len(sizes)):
             cell = ws.cell(row=r, column=c)
-            if cell.border is None or not cell.border.left.style:
+            border = cell.border
+            if border is None or border.left is None or not border.left.style:
                 cell.border = BOX
 
     # 汇总行（数据行后隔一行）：总件数 + 布料总条数

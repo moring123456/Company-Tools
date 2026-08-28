@@ -85,6 +85,14 @@ def _extract_date(filename: str) -> str:
     return date.today().strftime("%Y%m%d")
 
 
+def _extract_style_prefix(style: str) -> str:
+    """从款号提取字母前缀作为订单号前缀 (ADM1003 -> ADM, PPY4005 -> PPY, B0G51WSZ4Z -> B)"""
+    m = re.match(r"^([A-Za-z]+)", style)
+    if m:
+        return m.group(1).upper()
+    return "PPY"  # 兜底
+
+
 def _supplier_parts(sr: SKURow) -> Tuple[str, str]:
     """混搭色布行拆两个（支持 逗号/空格/分号 分隔）；非混搭返回 (布行, '')"""
     if is_mixed_color(sr.color):
@@ -115,13 +123,20 @@ def split(data: InputData, mixed_overrides: Dict[str, int] = None) -> SplitResul
     # 2. 订单号序号
     seq_by_key = {k: i + 1 for i, k in enumerate(order)}
 
+    # 2. 订单号前缀：从款号提取字母部分（ADM1003 -> ADM, PPY4005 -> PPY）
+    prefix_by_style: Dict[str, str] = {}
+
     for idx, key in enumerate(order):
         style, factory = key
         skus = groups[key]
         fi = data.fabrics.get(style)
 
+        if style not in prefix_by_style:
+            prefix_by_style[style] = _extract_style_prefix(style)
+        prefix = prefix_by_style[style]
+
         unit = OrderUnit(
-            order_no=f"PPY{date_str}{seq_by_key[key]:02d}",
+            order_no=f"{prefix}{date_str}{seq_by_key[key]:02d}",
             style=style,
             product_name=fi.product_name if fi else "",
             pattern=fi.pattern if fi else "",
