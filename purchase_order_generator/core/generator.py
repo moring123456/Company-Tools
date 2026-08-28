@@ -97,6 +97,42 @@ def _shift_merges_down(ws, start_1based: int, extra: int):
             pass
 
 
+def _capture_row_style(ws, row: int, col_start: int = 1, col_end: int = 15):
+    """捕获指定行的单元格样式（font/border/fill/alignment/number_format）和行高。
+    用于插入行后把样板行的样式复制到新行（保持颜色行/汇总行带边框/底纹）。"""
+    from copy import copy
+    captured = []
+    for c in range(col_start, col_end + 1):
+        cell = ws.cell(row, c)
+        captured.append({
+            "font": copy(cell.font) if cell.font else None,
+            "border": copy(cell.border) if cell.border else None,
+            "fill": copy(cell.fill) if cell.fill else None,
+            "alignment": copy(cell.alignment) if cell.alignment else None,
+            "number_format": cell.number_format,
+        })
+    row_height = ws.row_dimensions[row].height
+    return {"cells": captured, "row_height": row_height, "col_start": col_start, "col_end": col_end}
+
+
+def _apply_row_style(ws, style: dict, row: int):
+    """把捕获的样式应用到指定行（行高 + 单元格样式）"""
+    from openpyxl.cell.cell import MergedCell
+    cells = style["cells"]
+    for i, c in enumerate(range(style["col_start"], style["col_end"] + 1)):
+        cell = ws.cell(row, c)
+        if isinstance(cell, MergedCell):
+            continue
+        s = cells[i]
+        if s["font"]: cell.font = s["font"]
+        if s["border"]: cell.border = s["border"]
+        if s["fill"]: cell.fill = s["fill"]
+        if s["alignment"]: cell.alignment = s["alignment"]
+        cell.number_format = s["number_format"]
+    if style["row_height"]:
+        ws.row_dimensions[row].height = style["row_height"]
+
+
 def _replace_cell_images(ws, unit_images: Dict[str, bytes] = None):
     """仅当输入文件/网页提供了替换图时，替换模板中对应位置的图片。
     模板里的默认图保留不动（方案2: 图已内置在净化模板中）"""
@@ -173,11 +209,30 @@ def _build_order_sheet(wb, unit: OrderUnit):
     fixed_top = 24   # 样板固定内容从 R24 起，数据区 R8~R23 = 16 行
     avail = fixed_top - start
     need_rows = n + 2   # 数据行 + 空行 + 汇总行
-    if need_rows > avail:
-        # 颜色数超过容量：在固定内容前插行（必要操作），图片/合并随之下移
-        ws.insert_rows(start + avail, need_rows - avail)
-        _shift_images_down(ws, start + avail, need_rows - avail)
-        _shift_merges_down(ws, start + avail, need_rows - avail)
+    extra = need_rows - avail if need_rows > avail else 0
+
+    # ⚠️ 关键顺序：先 unmerge 再 insert，否则合并区域会破坏新行的样式
+    pre_unmerged = []
+    if extra > 0:
+        # 1. 先 unmerge 所有要移动的合并区域（fixed_top 及以下）
+        for mr in list(ws.merged_cells.ranges):
+            if mr.min_row >= fixed_top:
+                pre_unmerged.append((mr.min_row, mr.min_col, mr.max_row, mr.max_col))
+                try:
+                    ws.unmerge_cells(str(mr))
+                except Exception:
+                    pass
+        # 2. 捕获 R8 样式（在 unmerge 后，避免合并区域干扰）
+        template_style = _capture_row_style(ws, 8, 1, 15)
+        # 3. 插入行（在固定内容前）
+        ws.insert_rows(fixed_top, extra)
+        # 4. 给新插入行（fixed_top ~ fixed_top+extra-1）应用 R8 样式
+        for r in range(fixed_top, fixed_top + extra):
+            _apply_row_style(ws, template_style, r)
+        # 5. 移动图片（不影响样式）
+        _shift_images_down(ws, fixed_top, extra)
+
+    # 6. 写颜色行（值）
     for idx, cr in enumerate(unit.color_rows):
         r = start + idx
         ws.cell(row=r, column=1, value=cr.color)
@@ -188,17 +243,23 @@ def _build_order_sheet(wb, unit: OrderUnit):
         ws.cell(row=r, column=4 + len(sizes), value=cr.total)      # 总计
         ws.cell(row=r, column=5 + len(sizes), value=cr.rolls)      # 布料条数
         ws.cell(row=r, column=6 + len(sizes), value=cr.remark)     # 备注
-        # ⚠️ 不设置边框：样板已带边框，保持原样
 
-    # 汇总行（数据行后隔一行）：只写 总件数 + 布料总条数，其他留空
+    # 7. 汇总行（值）
     blank_row = start + n
     for c in range(1, 7 + len(sizes)):
-        ws.cell(row=blank_row, column=c).value = None   # 空行清值（保留格式）
+        ws.cell(row=blank_row, column=c).value = None
     total_row = start + n + 1
     ws.cell(row=total_row, column=1, value="总计")
-    ws.cell(row=total_row, column=4 + len(sizes), value=unit.total_qty)         # 总件数
-    ws.cell(row=total_row, column=5 + len(sizes), value=sum(cr.rolls for cr in unit.color_rows))  # 布料总条数
-    # ⚠️ 其余单元格不动（样板已有边框/标签）
+    ws.cell(row=total_row, column=4 + len(sizes), value=unit.total_qty)
+    ws.cell(row=total_row, column=5 + len(sizes), value=sum(cr.rolls for cr in unit.color_rows))
+
+    # 8. 写完数据后再合并移动后的固定内容合并区域（按之前记录的位置下移 extra 行）
+    if extra > 0:
+        for s, sc, e, ec in pre_unmerged:
+            try:
+                ws.merge_cells(start_row=s + extra, start_column=sc, end_row=e + extra, end_column=ec)
+            except Exception:
+                pass
 
     # 5. 洗水唛内容（样板 R36 标签 / R37 内容）
     for r in range(30, min(ws.max_row, 45) + 1):
