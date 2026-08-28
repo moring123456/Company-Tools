@@ -32,7 +32,7 @@ _SELF_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
 def _generate_input_template() -> bytes:
-    """生成空输入模板的 xlsx 字节，供下载"""
+    """生成空输入模板的 xlsx 字节,供下载"""
     wb = openpyxl.Workbook()
     thin = Side(style='thin')
     border = Border(left=thin, right=thin, top=thin, bottom=thin)
@@ -51,9 +51,21 @@ def _generate_input_template() -> bytes:
         cell.border = border
     for c, w in enumerate([10, 20, 25, 18, 8, 10, 10, 15, 12, 15], 1):
         ws1.column_dimensions[get_column_letter(c)].width = w
-    # 示例行
+    
+    # 示例行 - 纯色款 PPY0076A 打揽七分裤（多尺码）
+    ws1.append(['PPY0076A', 'PPY0076A-BK-S', 'PPY 打揽七分裤 黑色 S', '黑色', 'S', 30, '宏裕', '宏裕', '牛奶丝', ''])
+    ws1.append(['PPY0076A', 'PPY0076A-BK-M', 'PPY 打揽七分裤 黑色 M', '黑色', 'M', 50, '宏裕', '宏裕', '牛奶丝', ''])
+    ws1.append(['PPY0076A', 'PPY0076A-BK-L', 'PPY 打揽七分裤 黑色 L', '黑色', 'L', 60, '宏裕', '宏裕', '牛奶丝', ''])
     ws1.append(['PPY0076A', 'PPY0076A-BK-XL', 'PPY 打揽七分裤 黑色 XL', '黑色', 'XL', 60, '宏裕', '宏裕', '牛奶丝', ''])
+    ws1.append(['PPY0076A', 'PPY0076A-BK-2XL', 'PPY 打揽七分裤 黑色 2XL', '黑色', '2XL', 40, '宏裕', '宏裕', '牛奶丝', ''])
+    
+    # 示例行 - 印花款 PPY4003 睡衣套装（多尺码）
     ws1.append(['PPY4003', 'PPY4003-PK-M', 'PPY 睡衣套装 粉色 M', '粉色', 'M', 100, '剑邑', '剑邑', '卫衣布', ''])
+    ws1.append(['PPY4003', 'PPY4003-PK-L', 'PPY 睡衣套装 粉色 L', '粉色', 'L', 120, '剑邑', '剑邑', '卫衣布', ''])
+    ws1.append(['PPY4003', 'PPY4003-PK-XL', 'PPY 睡衣套装 粉色 XL', '粉色', 'XL', 80, '剑邑', '剑邑', '卫衣布', ''])
+    
+    # 示例行 - 混搭色款（颜色含+号,布行用逗号分隔2个布行）
+    ws1.append(['PPY0076A', 'PPY0076A-MIX-XL', 'PPY 打揽七分裤 混搭 XL', '#179海军蓝+YH5126棕蓝格子', 'XL', 30, '宏裕,剑邑', '宏裕,剑邑', '牛奶丝', '混搭色示例'])
 
     # Sheet2 面料表
     ws2 = wb.create_sheet('面料表')
@@ -78,8 +90,13 @@ def _generate_input_template() -> bytes:
         cell.border = border
     ws3.column_dimensions['A'].width = 12
     ws3.column_dimensions['B'].width = 40
-    for item in ['品牌', '账号代码', '申请人', '联系地址', '采购仓库']:
-        ws3.append([item, ''])
+    
+    # 配置表示例数据
+    ws3.append(['品牌', 'POPYOUNG'])
+    ws3.append(['账号代码', 'PPY'])
+    ws3.append(['申请人', '张三'])
+    ws3.append(['联系地址', '广东省广州市海珠区新港中路xxx号'])
+    ws3.append(['采购仓库', '主仓'])
 
     buf = io.BytesIO()
     wb.save(buf)
