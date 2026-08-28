@@ -198,7 +198,18 @@ def _build_order_sheet(wb, unit: OrderUnit):
     ws["B5"] = unit.factory        # 加工厂
     ws["H5"] = int(unit.date_str) if unit.date_str and str(unit.date_str).isdigit() else unit.date_str  # 日期（数字）
 
-    # 3. 尺码表头：样板已固定 9 列 (C~K)，只写尺码名（标签/合并不动）
+    # 3. 表头：第 6 行固定标签 + 尺码名（只写值，不碰样式——字体/斜线边框/合并/底纹都保留样板原样）
+    #    ⚠️ A6"颜色尺码"是斜线表头（diagonalDown），样式在模板里，绝不能动样式
+    HEADER_LABELS = {
+        1: "颜色尺码",
+        2: "包装袋规格",
+        12: "比例",
+        13: "总计",
+        14: "布料\n条数",
+        15: "备注",
+    }
+    for col, label in HEADER_LABELS.items():
+        ws.cell(row=6, column=col).value = label
     sizes = unit.sizes   # 固定 ['S','M','L','XL','2XL','3XL','4XL','5XL','6XL']
     for i, s in enumerate(sizes):
         ws.cell(row=6, column=3 + i).value = s
