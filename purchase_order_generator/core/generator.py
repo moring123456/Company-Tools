@@ -194,9 +194,22 @@ def _build_order_sheet(wb, unit: OrderUnit):
     # G4 保留「店铺」标签（用户样板保留），H4 值留空
     ws["H4"] = ""
     ws["B5"] = unit.factory        # 加工厂
-    ws["H5"] = unit.date_str       # 日期
+    ws["H5"] = int(unit.date_str) if unit.date_str and str(unit.date_str).isdigit() else unit.date_str  # 日期（数字）
 
     # 重写尺码表头（R6 为合并左上角，R7 是 MergedCell 不可写）
+    #    ⚠️ 模板里 A6='颜色尺码'、B6='包装袋规格'、L6='比例'、M6='总计'、N6='布料条数'、O6='备注'
+    #    也必须重写（_purge_data_area 只清 R8 起的数据行，不动 R6 表头；但若 MAX_COL
+    #    范围扩大会清到表头，需要明确写回表头标签以防模板被改后丢失）
+    HEADER_LABELS = {
+        1: "颜色尺码",
+        2: "包装袋规格",
+        12: "比例",
+        13: "总计",
+        14: "布料\n条数",
+        15: "备注",
+    }
+    for col, label in HEADER_LABELS.items():
+        ws.cell(row=6, column=col).value = label
     for i, s in enumerate(sizes):
         col = 3 + i
         ws.cell(row=6, column=col).value = s
