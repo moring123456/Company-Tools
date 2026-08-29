@@ -176,11 +176,51 @@ def _cell_area_size_px(ws, row: int, col: int) -> Tuple[float, float]:
     return width_px, height_px
 
 
+def _build_image_anchor(ws, row: int, col: int, image_w: int, image_h: int):
+    """为图片构造锚点：等比缩放到（合并）区域 + 居中放置。
+    优先 TwoCellAnchor（"移动并调整大小"），实现"图片规整放进所属单元格"的视觉效果。
+    返回 openpyxl 可直接赋给 img.anchor 的对象。"""
+    from openpyxl.drawing.spreadsheet_drawing import OneCellAnchor, TwoCellAnchor, AnchorMarker
+    from openpyxl.drawing.xdr import XDRPositiveSize2D
+    from openpyxl.utils.units import pixels_to_EMU
+    # 1. 找合并区域（图片应放合并区域内更"规整"）
+    area = None
+    for mr in ws.merged_cells.ranges:
+        if mr.min_row <= row <= mr.max_row and mr.min_col <= col <= mr.max_col:
+            area = mr
+            break
+    if area:
+        r1, r2 = area.min_row, area.max_row
+        c1, c2 = area.min_col, area.max_col
+    else:
+        r1 = r2 = row
+        c1 = c2 = col
+    # 2. 计算区域总像素宽高
+    area_w = sum((ws.column_dimensions[get_column_letter(c)].width or 8.43) * 7
+                 for c in range(c1, c2 + 1))
+    area_h = sum((ws.row_dimensions[r].height or 15.0) * 96 / 72
+                 for r in range(r1, r2 + 1))
+    # 3. 等比缩放（留 5% 内边距，避免与边框重叠）
+    scale = min(area_w * 0.95 / image_w, area_h * 0.95 / image_h)
+    iw = max(int(image_w * scale), 1)
+    ih = max(int(image_h * scale), 1)
+    # 4. 居中偏移（像素 → EMU）
+    off_x = pixels_to_EMU(int((area_w - iw) / 2))
+    off_y = pixels_to_EMU(int((area_h - ih) / 2))
+    # 5. 构造 TwoCellAnchor：from = 区域左上 + 偏移, to = 区域左上 + 偏移 + 图片尺寸
+    #    这样图片完全嵌入合并区域中央，缩放尺寸 = 等比居中，不变形不超边
+    start = AnchorMarker(col=c1 - 1, colOff=off_x, row=r1 - 1, rowOff=off_y)
+    end = AnchorMarker(col=c1 - 1, colOff=off_x + pixels_to_EMU(iw),
+                       row=r1 - 1, rowOff=off_y + pixels_to_EMU(ih))
+    anchor = TwoCellAnchor(_from=start, to=end, editAs='oneCell')
+    return anchor, iw, ih
+
+
 def _replace_cell_images(ws, unit_images: Dict[str, bytes] = None):
     """仅当输入文件/网页提供了替换图时，替换模板中对应位置的图片。
     模板里的默认图保留不动（方案2: 图已内置在净化模板中）。
-    ⚠️ 图片尺寸按锚点单元格/合并区域的实际大小缩放（含 5% 内边距），
-       确保图片规整放进所属单元格、不超出边框。"""
+    ⚠️ 采用 TwoCellAnchor + 等比居中：图片嵌入（合并）单元格区域中央，
+       缩放比例最优、不变形、不超出边框、跨 Excel/WPS 一致。"""
     import io
     unit_images = unit_images or {}
     if not unit_images:
@@ -196,21 +236,17 @@ def _replace_cell_images(ws, unit_images: Dict[str, bytes] = None):
             if r0 == row - 1 and c0 == col - 1 and label in unit_images:
                 ws._images.remove(img)
                 break
-    # 2. 插入新图（按锚点单元格实际尺寸等比缩放）
+    # 2. 插入新图（TwoCellAnchor + 等比居中嵌入区域）
     for label, (row, col) in anchors.items():
         if label not in unit_images:
             continue
         nimg = XLImage(io.BytesIO(unit_images[label]))
-        # ⚠️ 目标尺寸 = 锚点单元格/合并区域的实际大小（留 5% 内边距），不再用硬编码 DISPIMG_DEFAULTS
-        target_w, target_h = _cell_area_size_px(ws, row, col)
-        target_w *= 0.95
-        target_h *= 0.95
         iw, ih = nimg.width, nimg.height
-        if iw and ih and target_w > 1 and target_h > 1:
-            scale = min(target_w / iw, target_h / ih)
-            nimg.width = max(int(iw * scale), 1)
-            nimg.height = max(int(ih * scale), 1)
-        ws.add_image(nimg, f"{get_column_letter(col)}{row}")
+        if iw and ih:
+            anchor, new_w, new_h = _build_image_anchor(ws, row, col, iw, ih)
+            nimg.width, nimg.height = new_w, new_h
+            nimg.anchor = anchor
+        ws.add_image(nimg)
 
 
 def _clear_data_values(ws, fixed_top):
