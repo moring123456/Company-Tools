@@ -73,28 +73,43 @@ def _shift_images_down(ws, start_1based: int, extra: int):
 
 def _shift_merges_down(ws, start_1based: int, extra: int):
     """插行后把位于插行位置及其下方的合并区域整体下移 extra 行。
-    ⚠️ openpyxl insert_rows 不会自动移动合并区域，必须手动处理，
-       否则保存时新数据与旧合并区域冲突被清空（R24 后数据丢失）。"""
+    ⚠️ 关键修复：openpyxl 的 `unmerge_cells` 会删除 _cells dict 中的 MergedCell 引用，
+       但延伸区域可能包含物理值（insert_rows 把值移到新位置但延伸 MergedCell 已被新位置覆盖）。
+       更糟糕的是，unmerge_cells 会**误删**新位置上不在合并范围内的普通 Cell（因为延伸范围可能
+       包括了 insert_rows 后物理移动到那里的普通 Cell，例如 G46=O51 合并延伸 cell G47:G50 等，
+       但 G46 是 D46:H46 的延伸 cell 也包含 G46，会被误删）。
+       
+       **采用 in-place shift**：直接修改 MergedCellRange 对象的坐标，值已经物理移动到新位置，
+       这样完全不破坏 _cells 字典、不清空值、不需要重新 merge。
+       
+    同时**手动移动行高**——openpyxl 的 row_dimensions dict key 不会随 insert_rows 移动，
+       必须先清空原位置行高，再设到新位置。"""
     if extra <= 0:
         return
+    # 1. 收集所有 >= start_1based 的合并区域
     affected = []
     for mr in list(ws.merged_cells.ranges):
         if mr.min_row >= start_1based:
             affected.append(mr)
-    # 先解除，再按新位置重建（避免 openpyxl 合并重叠校验报错）
+    # 2. 收集所有 >= start_1based 的行高（按行）
+    row_heights = {}
+    for r in range(start_1based, ws.max_row + 1):
+        h = ws.row_dimensions[r].height
+        if h is not None:
+            row_heights[r] = h
+    # 3. ⚠️ In-place shift（最干净的方式）：直接修改 MergedCellRange 坐标到新位置
+    #    值已经在新位置（insert_rows 物理移动），不需要清空/恢复。
     for mr in affected:
         try:
-            ws.unmerge_cells(str(mr))
+            mr.shift(row_shift=extra)
         except Exception:
             pass
-    for mr in affected:
-        try:
-            ws.merge_cells(
-                start_row=mr.min_row + extra, start_column=mr.min_col,
-                end_row=mr.max_row + extra, end_column=mr.max_col,
-            )
-        except Exception:
-            pass
+    # 4. 清空原位置的行高（不会动到值）
+    for r in range(start_1based, ws.max_row + 1):
+        ws.row_dimensions[r].height = None
+    # 5. 行高按"按行"批量重新设置到下移后的位置——精细控制每一行
+    for old_r, h in row_heights.items():
+        ws.row_dimensions[old_r + extra].height = h
 
 
 def _capture_row_style(ws, row: int, col_start: int = 1, col_end: int = 15):
@@ -166,16 +181,26 @@ def _replace_cell_images(ws, unit_images: Dict[str, bytes] = None):
         ws.add_image(nimg, f"{get_column_letter(col)}{row}")
 
 
-def _clear_data_values(ws):
-    """只清空 R8~R23 数据区的单元格值，**完全保留样式/合并/行高/列宽/边框**。
+def _clear_data_values(ws, fixed_top):
+    """只清空数据区（R8~fixed_top-1）的单元格值，**完全保留样式/合并/行高/列宽/边框**。
     用户要求：格式以样板为准，只管写数据。"""
     from openpyxl.cell.cell import MergedCell
-    for r in range(8, 24):
+    for r in range(8, fixed_top):
         for c in range(1, 16):
             cell = ws.cell(row=r, column=c)
             if isinstance(cell, MergedCell):
                 continue
             cell.value = None
+
+
+def _find_fixed_top(ws, start_row=8):
+    """动态定位固定内容起点：找到「包装袋图片」标签行（样板在 R36 或 R24）。
+    数据区 = R8 ~ fixed_top-1。"""
+    for r in range(start_row, ws.max_row + 1):
+        v = ws.cell(row=r, column=1).value
+        if isinstance(v, str) and "包装袋" in v:
+            return r
+    return ws.max_row + 1  # 找不到则用最大行
 
 
 # ---------- 订单 sheet ----------
@@ -186,8 +211,13 @@ def _build_order_sheet(wb, unit: OrderUnit):
     """
     ws = wb["订单"]
 
-    # 1. 只清空数据区 R8~R23 的值（保留全部格式）；表头 R6 的标签样板已有，不重写
-    _clear_data_values(ws)
+    # 0. 动态定位固定内容起点（模板样板可能是 1色版 R24 或 26色版 R36）
+    fixed_top = _find_fixed_top(ws)
+    if fixed_top < 10:
+        fixed_top = 24   # 兜底：找不到「包装袋图片」标签时用模板默认
+
+    # 1. 只清空数据区 R8~fixed_top-1 的值（保留全部格式）
+    _clear_data_values(ws, fixed_top)
 
     # 2. 头部字段（只写值，样板已有标签/合并/样式）
     ws["B2"] = unit.style          # 款号
@@ -198,18 +228,8 @@ def _build_order_sheet(wb, unit: OrderUnit):
     ws["B5"] = unit.factory        # 加工厂
     ws["H5"] = int(unit.date_str) if unit.date_str and str(unit.date_str).isdigit() else unit.date_str  # 日期（数字）
 
-    # 3. 表头：第 6 行固定标签 + 尺码名（只写值，不碰样式——字体/斜线边框/合并/底纹都保留样板原样）
-    #    ⚠️ A6"颜色尺码"是斜线表头（diagonalDown），需用换行符让"颜色"靠上、"尺码"靠下
-    HEADER_LABELS = {
-        1: "颜色\n尺码",   # 斜线表头：用换行分隔，WPS 渲染时"颜色"在左上、"尺码"在右下
-        2: "包装袋规格",
-        12: "比例",
-        13: "总计",
-        14: "布料\n条数",
-        15: "备注",
-    }
-    for col, label in HEADER_LABELS.items():
-        ws.cell(row=6, column=col).value = label
+    # 3. 表头：**不重写 A6/B6/L6/M6/N6/O6**（模板已有正确值，含 A6 斜线表头的空格布局）
+    #    只写尺码名 C~K（值一致，不碰样式）
     sizes = unit.sizes   # 固定 ['S','M','L','XL','2XL','3XL','4XL','5XL','6XL']
     for i, s in enumerate(sizes):
         ws.cell(row=6, column=3 + i).value = s
@@ -217,30 +237,24 @@ def _build_order_sheet(wb, unit: OrderUnit):
     # 4. 数据行（R8 起）+ 汇总行（隔一行）
     start = 8
     n = len(unit.color_rows)
-    fixed_top = 24   # 样板固定内容从 R24 起，数据区 R8~R23 = 16 行
+    # fixed_top 已在步骤0动态检测（样板 26色版在 R36；1色版在 R24）
     avail = fixed_top - start
     need_rows = n + 2   # 数据行 + 空行 + 汇总行
     extra = need_rows - avail if need_rows > avail else 0
 
-    # ⚠️ 关键顺序：先 unmerge 再 insert，否则合并区域会破坏新行的样式
-    pre_unmerged = []
+    # ⚠️ 关键顺序：先 insert → _shift_merges_down（内部 unmerge+清空行高+重新 merge+恢复行高）→ _apply_row_style
+    #    注意：**不能预先 unmerge**！否则 _shift_merges_down 内部 affected 收集为 0，导致合并区域全丢
     if extra > 0:
-        # 1. 先 unmerge 所有要移动的合并区域（fixed_top 及以下）
-        for mr in list(ws.merged_cells.ranges):
-            if mr.min_row >= fixed_top:
-                pre_unmerged.append((mr.min_row, mr.min_col, mr.max_row, mr.max_col))
-                try:
-                    ws.unmerge_cells(str(mr))
-                except Exception:
-                    pass
-        # 2. 捕获 R8 样式（在 unmerge 后，避免合并区域干扰）
-        template_style = _capture_row_style(ws, 8, 1, 15)
-        # 3. 插入行（在固定内容前）
+        # 1. 插入行
         ws.insert_rows(fixed_top, extra)
-        # 4. 给新插入行（fixed_top ~ fixed_top+extra-1）应用 R8 样式
+        # 2. 移动固定内容的合并区域 + 行高（必须在 _apply_row_style 之前！否则新空行会被 R8 样式覆盖）
+        _shift_merges_down(ws, fixed_top, extra)
+        # 3. 捕获 R8 样式 + 给新插入行应用 R8 样式
+        template_style = _capture_row_style(ws, 8, 1, 15)
         for r in range(fixed_top, fixed_top + extra):
             _apply_row_style(ws, template_style, r)
-        # 5. 移动图片（不影响样式）
+    # 4.5 移动图片
+    if extra > 0:
         _shift_images_down(ws, fixed_top, extra)
 
     # 6. 写颜色行（值）
@@ -264,16 +278,11 @@ def _build_order_sheet(wb, unit: OrderUnit):
     ws.cell(row=total_row, column=4 + len(sizes), value=unit.total_qty)
     ws.cell(row=total_row, column=5 + len(sizes), value=sum(cr.rolls for cr in unit.color_rows))
 
-    # 8. 写完数据后再合并移动后的固定内容合并区域（按之前记录的位置下移 extra 行）
-    if extra > 0:
-        for s, sc, e, ec in pre_unmerged:
-            try:
-                ws.merge_cells(start_row=s + extra, start_column=sc, end_row=e + extra, end_column=ec)
-            except Exception:
-                pass
+    # 8. 写完颜色行/汇总行后，把固定内容（合并+行高+图片）已通过 _shift_merges_down 处理
+    # 4.5 已调用 _shift_merges_down（在 extra>0 时）；以下手动的 remerge 逻辑已废弃
 
-    # 5. 洗水唛内容（样板 R36 标签 / R37 内容）
-    for r in range(30, min(ws.max_row, 45) + 1):
+    # 5. 洗水唛内容（动态定位「洗水唛」标签行，内容写在其下一行）
+    for r in range(fixed_top, min(ws.max_row, 90) + 1):
         if ws.cell(row=r, column=1).value and "洗水唛" in str(ws.cell(row=r, column=1).value):
             ws.cell(row=r + 1, column=1, value=unit.wash_label)
             break
