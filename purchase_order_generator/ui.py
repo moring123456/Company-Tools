@@ -29,10 +29,17 @@ except ImportError:
     _PKG = False
 
 _SELF_DIR = os.path.dirname(os.path.abspath(__file__))
+# 下载模板底版：用户提供的真实模板（含主表公式款号/真实示例/图片sheet含DISPIMG默认图）
+INPUT_TEMPLATE_PATH = os.path.join(_SELF_DIR, "templates", "input_template.xlsx")
 
 
 def _generate_input_template() -> bytes:
-    """生成空输入模板的 xlsx 字节,供下载"""
+    """生成/返回下载模板 xlsx 字节。
+    优先读取 templates/input_template.xlsx（用户提供的真实模板底版，
+    含 4 个 sheet：主表/面料表/配置表/图片）；文件不存在时 fallback 动态生成基础版。"""
+    if os.path.exists(INPUT_TEMPLATE_PATH):
+        with open(INPUT_TEMPLATE_PATH, "rb") as f:
+            return f.read()
     wb = openpyxl.Workbook()
     thin = Side(style='thin')
     border = Border(left=thin, right=thin, top=thin, bottom=thin)
@@ -110,7 +117,7 @@ def _generate_input_template() -> bytes:
 
 def render_purchase_order_page():
     """采购单自动生成模块主界面（不含 set_page_config/title，避免与平台冲突）"""
-    st.caption("朗晨 PPY 采购单批量生成 · 输入 1 文件 3 工作表（主表 / 面料表 / 配置表）→ 输出 按款×工厂 拆分 + 每布行一张申购单")
+    st.caption("朗晨 PPY 采购单批量生成 · 输入 1 文件 4 工作表（主表 / 面料表 / 配置表 / 图片）→ 输出 按款×工厂 拆分 + 每布行一张申购单")
 
     # ---------------- 状态初始化 ----------------
     if "uploaded_name" not in st.session_state:
