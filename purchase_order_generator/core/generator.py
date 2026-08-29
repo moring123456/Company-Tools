@@ -178,12 +178,13 @@ def _cell_area_size_px(ws, row: int, col: int) -> Tuple[float, float]:
 
 def _build_image_anchor(ws, row: int, col: int, image_w: int, image_h: int):
     """为图片构造锚点：等比缩放到（合并）区域 + 居中放置。
-    优先 TwoCellAnchor（"移动并调整大小"），实现"图片规整放进所属单元格"的视觉效果。
-    返回 openpyxl 可直接赋给 img.anchor 的对象。"""
-    from openpyxl.drawing.spreadsheet_drawing import OneCellAnchor, TwoCellAnchor, AnchorMarker
+    采用 OneCellAnchor + colOff/rowOff 偏移（openpyxl 最标准的图片放置方式，
+    跨 Excel/WPS 渲染一致）— TwoCellAnchor 实际渲染时图片会偏左上不居中。
+    返回 (anchor, new_w, new_h) 三元组。"""
+    from openpyxl.drawing.spreadsheet_drawing import OneCellAnchor, AnchorMarker
     from openpyxl.drawing.xdr import XDRPositiveSize2D
     from openpyxl.utils.units import pixels_to_EMU
-    # 1. 找合并区域（图片应放合并区域内更"规整"）
+    # 1. 找合并区域
     area = None
     for mr in ws.merged_cells.ranges:
         if mr.min_row <= row <= mr.max_row and mr.min_col <= col <= mr.max_col:
@@ -200,19 +201,18 @@ def _build_image_anchor(ws, row: int, col: int, image_w: int, image_h: int):
                  for c in range(c1, c2 + 1))
     area_h = sum((ws.row_dimensions[r].height or 15.0) * 96 / 72
                  for r in range(r1, r2 + 1))
-    # 3. 等比缩放（留 5% 内边距，避免与边框重叠）
-    scale = min(area_w * 0.95 / image_w, area_h * 0.95 / image_h)
+    # 3. 等比缩放（留 10% 内边距，宽限 1 像素避免溢出）
+    scale = min(area_w * 0.90 / image_w, area_h * 0.90 / image_h)
     iw = max(int(image_w * scale), 1)
     ih = max(int(image_h * scale), 1)
-    # 4. 居中偏移（像素 → EMU）
+    # 4. 居中偏移（按区域左上角，colOff/rowOff 是 EMU）
     off_x = pixels_to_EMU(int((area_w - iw) / 2))
     off_y = pixels_to_EMU(int((area_h - ih) / 2))
-    # 5. 构造 TwoCellAnchor：from = 区域左上 + 偏移, to = 区域左上 + 偏移 + 图片尺寸
-    #    这样图片完全嵌入合并区域中央，缩放尺寸 = 等比居中，不变形不超边
-    start = AnchorMarker(col=c1 - 1, colOff=off_x, row=r1 - 1, rowOff=off_y)
-    end = AnchorMarker(col=c1 - 1, colOff=off_x + pixels_to_EMU(iw),
-                       row=r1 - 1, rowOff=off_y + pixels_to_EMU(ih))
-    anchor = TwoCellAnchor(_from=start, to=end, editAs='oneCell')
+    # 5. OneCellAnchor：_from.colOff/rowOff 是从该单元格的偏移；ext 是图片总尺寸
+    anchor = OneCellAnchor(
+        _from=AnchorMarker(col=c1 - 1, colOff=off_x, row=r1 - 1, rowOff=off_y),
+        ext=XDRPositiveSize2D(pixels_to_EMU(iw), pixels_to_EMU(ih))
+    )
     return anchor, iw, ih
 
 
