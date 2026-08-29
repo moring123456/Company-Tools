@@ -148,9 +148,39 @@ def _apply_row_style(ws, style: dict, row: int):
         ws.row_dimensions[row].height = style["row_height"]
 
 
+def _cell_area_size_px(ws, row: int, col: int) -> Tuple[float, float]:
+    """计算锚点 (row, col) 所在单元格/合并区域的实际像素尺寸 (宽, 高)。
+    ⚠️ 图片要"规整放进单元格"，必须按目标区域的实际列宽×行高换算像素，
+       不能用硬编码尺寸（否则图片超出边框）。"""
+    from openpyxl.utils import get_column_letter
+    # 1. 找包含该格的合并区域（图片放合并区域内更规整）
+    area = None
+    for mr in ws.merged_cells.ranges:
+        if mr.min_row <= row <= mr.max_row and mr.min_col <= col <= mr.max_col:
+            area = mr
+            break
+    r1, r2 = (area.min_row, area.max_row) if area else (row, row)
+    c1, c2 = (area.min_col, area.max_col) if area else (col, col)
+    # 2. 总列宽（Excel 字符单位）→ 像素：默认 11pt 字体下 1 字符宽 ≈ 7px
+    total_w = 0.0
+    for c in range(c1, c2 + 1):
+        w = ws.column_dimensions[get_column_letter(c)].width
+        total_w += w if w else 8.43   # 默认列宽 8.43 字符
+    width_px = total_w * 7
+    # 3. 总行高（pt）→ 像素：1pt = 96/72 px（96 DPI 屏幕）
+    total_h = 0.0
+    for r in range(r1, r2 + 1):
+        h = ws.row_dimensions[r].height
+        total_h += h if h else 15.0   # 默认行高 15pt
+    height_px = total_h * 96 / 72
+    return width_px, height_px
+
+
 def _replace_cell_images(ws, unit_images: Dict[str, bytes] = None):
     """仅当输入文件/网页提供了替换图时，替换模板中对应位置的图片。
-    模板里的默认图保留不动（方案2: 图已内置在净化模板中）"""
+    模板里的默认图保留不动（方案2: 图已内置在净化模板中）。
+    ⚠️ 图片尺寸按锚点单元格/合并区域的实际大小缩放（含 5% 内边距），
+       确保图片规整放进所属单元格、不超出边框。"""
     import io
     unit_images = unit_images or {}
     if not unit_images:
@@ -166,18 +196,20 @@ def _replace_cell_images(ws, unit_images: Dict[str, bytes] = None):
             if r0 == row - 1 and c0 == col - 1 and label in unit_images:
                 ws._images.remove(img)
                 break
-    # 2. 插入新图（等比缩放）
+    # 2. 插入新图（按锚点单元格实际尺寸等比缩放）
     for label, (row, col) in anchors.items():
         if label not in unit_images:
             continue
         nimg = XLImage(io.BytesIO(unit_images[label]))
-        max_w, max_h = DISPIMG_DEFAULTS[label][1], DISPIMG_DEFAULTS[label][2]
+        # ⚠️ 目标尺寸 = 锚点单元格/合并区域的实际大小（留 5% 内边距），不再用硬编码 DISPIMG_DEFAULTS
+        target_w, target_h = _cell_area_size_px(ws, row, col)
+        target_w *= 0.95
+        target_h *= 0.95
         iw, ih = nimg.width, nimg.height
-        if iw and ih:
-            scale = min(max_w / iw, max_h / ih, 1.0)
-            if scale < 1.0:
-                nimg.width = max(int(iw * scale), 1)
-                nimg.height = max(int(ih * scale), 1)
+        if iw and ih and target_w > 1 and target_h > 1:
+            scale = min(target_w / iw, target_h / ih)
+            nimg.width = max(int(iw * scale), 1)
+            nimg.height = max(int(ih * scale), 1)
         ws.add_image(nimg, f"{get_column_letter(col)}{row}")
 
 
