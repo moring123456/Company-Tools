@@ -78,10 +78,10 @@ def _shift_merges_down(ws, start_1based: int, extra: int):
        更糟糕的是，unmerge_cells 会**误删**新位置上不在合并范围内的普通 Cell（因为延伸范围可能
        包括了 insert_rows 后物理移动到那里的普通 Cell，例如 G46=O51 合并延伸 cell G47:G50 等，
        但 G46 是 D46:H46 的延伸 cell 也包含 G46，会被误删）。
-       
+
        **采用 in-place shift**：直接修改 MergedCellRange 对象的坐标，值已经物理移动到新位置，
        这样完全不破坏 _cells 字典、不清空值、不需要重新 merge。
-       
+
     同时**手动移动行高**——openpyxl 的 row_dimensions dict key 不会随 insert_rows 移动，
        必须先清空原位置行高，再设到新位置。"""
     if extra <= 0:
@@ -110,6 +110,79 @@ def _shift_merges_down(ws, start_1based: int, extra: int):
     # 5. 行高按"按行"批量重新设置到下移后的位置——精细控制每一行
     for old_r, h in row_heights.items():
         ws.row_dimensions[old_r + extra].height = h
+
+
+def _shift_merges_up(ws, start_1based: int, amount: int):
+    """删除行后把位于删除位置及其下方的合并区域整体上移 amount 行。
+    与 _shift_merges_down 相对：使用 mr.shift(row_shift=-amount)。
+    注：openpyxl 的 delete_rows 不会自动处理 merged_cells.ranges，需手动 shift。
+    行高的迁移由调用方在 delete_rows 之前收集、之后迁移（见 _delete_empty_rows_below）。"""
+    if amount <= 0:
+        return
+    affected = []
+    for mr in list(ws.merged_cells.ranges):
+        if mr.min_row >= start_1based:
+            affected.append(mr)
+    for mr in affected:
+        try:
+            mr.shift(row_shift=-amount)
+        except Exception:
+            pass
+
+
+def _shift_images_up(ws, start_1based: int, amount: int):
+    """删除行后把锚点位于删除位置及其下方的图片整体上移 amount 行（0-based 处理）"""
+    if amount <= 0:
+        return
+    for img in ws._images:
+        try:
+            r0 = img.anchor._from.row
+        except (AttributeError, TypeError):
+            continue
+        if r0 >= start_1based - 1:
+            new_r = r0 - amount
+            if new_r >= 0:
+                img.anchor._from.row = new_r
+
+
+def _delete_empty_rows_below(ws, total_row: int, fixed_top: int):
+    """删除总计行与固定内容（包装袋图片）之间的空白行。
+    调用 ws.delete_rows 删除行后, 手动上移合并区域和图片锚点（openpyxl 的
+    delete_rows 不会自动更新 _images 锚点和 merged_cells.ranges）。
+    ⚠️ 行高必须在 delete_rows **之前**收集：openpyxl 的 delete_rows 不清理
+    row_dimensions dict 中的旧 key，且会把 ws.max_row 变小——若删除后再收集，
+    原 max_row 以下的残留行高（如模板 R49=80/R53=31.5/R60=78/R61=69）会因
+    超过新 max_row 而漏收，导致固定区行高全部丢失。
+    返回新的 fixed_top（已上移 amount 行）。"""
+    empty_count = fixed_top - total_row - 1
+    if empty_count <= 0:
+        return fixed_top
+    delete_start = total_row + 1   # 1-based
+
+    # 0. ⚠️ 删除前收集行高（只保留删除范围**以下**的固定区行高）
+    keep_heights = {}
+    for r in range(delete_start + empty_count, ws.max_row + 1):
+        h = ws.row_dimensions[r].height
+        if h is not None:
+            keep_heights[r] = h
+
+    # 1. 删除行（openpyxl 只移动单元格值）
+    ws.delete_rows(delete_start, empty_count)
+
+    # 2. ⚠️ 迁移行高：delete_rows 不清理 row_dimensions——先清空全部残留
+    #    （>= delete_start 的旧 key，包括被删行范围的 25.0 数据区行高），再写新位置
+    for r in list(ws.row_dimensions.keys()):
+        if r >= delete_start:
+            ws.row_dimensions[r].height = None
+    for old_r, h in keep_heights.items():
+        ws.row_dimensions[old_r - empty_count].height = h
+
+    # 3. 兜底：上移图片锚点（openpyxl delete_rows 不会更新 _images）
+    _shift_images_up(ws, delete_start, empty_count)
+    # 4. 兜底：上移合并区域（delete_rows 不处理 merged_cells.ranges）
+    _shift_merges_up(ws, delete_start, empty_count)
+    # 5. 返回新的 fixed_top
+    return fixed_top - empty_count
 
 
 def _capture_row_style(ws, row: int, col_start: int = 1, col_end: int = 15):
@@ -301,6 +374,8 @@ def _build_order_sheet(wb, unit: OrderUnit):
     sizes = unit.sizes   # 固定 ['S','M','L','XL','2XL','3XL','4XL','5XL','6XL']
     for i, s in enumerate(sizes):
         ws.cell(row=6, column=3 + i).value = s
+    # ⚠️ 强制设置 R6 行高：容纳 24pt 字号两行（"颜色"+"尺码"），模板默认 25 太小
+    ws.row_dimensions[6].height = 50.0
 
     # 4. 数据行（R8 起）+ 汇总行（隔一行）
     start = 8
@@ -313,6 +388,8 @@ def _build_order_sheet(wb, unit: OrderUnit):
     # ⚠️ 关键顺序：先 insert → _shift_merges_down（内部 unmerge+清空行高+重新 merge+恢复行高）→ _apply_row_style
     #    注意：**不能预先 unmerge**！否则 _shift_merges_down 内部 affected 收集为 0，导致合并区域全丢
     if extra > 0:
+        # 0. 保存原始 fixed_top（_shift_images_down 仍需旧值定位图片下移起点）
+        fixed_top_original = fixed_top
         # 1. 插入行
         ws.insert_rows(fixed_top, extra)
         # 2. 移动固定内容的合并区域 + 行高（必须在 _apply_row_style 之前！否则新空行会被 R8 样式覆盖）
@@ -321,9 +398,10 @@ def _build_order_sheet(wb, unit: OrderUnit):
         template_style = _capture_row_style(ws, 8, 1, 15)
         for r in range(fixed_top, fixed_top + extra):
             _apply_row_style(ws, template_style, r)
-    # 4.5 移动图片
-    if extra > 0:
-        _shift_images_down(ws, fixed_top, extra)
+        # 4.5 移动图片（用原始 fixed_top，因为 openpyxl 的 _images 锚点未随 insert_rows 更新）
+        _shift_images_down(ws, fixed_top_original, extra)
+        # ⚠️ 5. 更新 fixed_top：包装袋图片等固定内容已下移 extra 行
+        fixed_top += extra
 
     # 6. 写颜色行（值）
     for idx, cr in enumerate(unit.color_rows):
@@ -349,17 +427,53 @@ def _build_order_sheet(wb, unit: OrderUnit):
     # 8. 写完颜色行/汇总行后，把固定内容（合并+行高+图片）已通过 _shift_merges_down 处理
     # 4.5 已调用 _shift_merges_down（在 extra>0 时）；以下手动的 remerge 逻辑已废弃
 
-    # 5. 洗水唛内容（动态定位「洗水唛」标签行，内容写在其下一行）
+    # 9. 洗水唛内容（纯值写入，动态定位「洗水唛内容」标签行，值写在下一行 A 列）
+    #     原模板是公式: =VLOOKUP(B2,'THD款式图（请及时更新）'!A:C,3,FALSE)&"
+    #                    +常规洗涤方式
+    #                    MADE IN CHINA"
+    #     用户要求: 不需要公式，直接按 Python 计算结果写值即可——成分取输入文件的
+    #              洗水唛字段（每个成分独占一行），后面固定追加
+    #              "常规洗涤方式" 和 "MADE IN CHINA" 两行。
     for r in range(fixed_top, min(ws.max_row, 90) + 1):
         if ws.cell(row=r, column=1).value and "洗水唛" in str(ws.cell(row=r, column=1).value):
-            ws.cell(row=r + 1, column=1, value=unit.wash_label)
+            cell = ws.cell(row=r + 1, column=1)
+            # 优先用成分列表（保持输入文件原顺序）；退路用 wash_label 按 \n 拆分
+            components = list(unit.wash_components or [])
+            if not components and unit.wash_label:
+                components = [p.strip() for p in unit.wash_label.split("\n") if p.strip()]
+            if components:
+                cell.value = "\n".join(components + ["常规洗涤方式", "MADE IN CHINA"])
+            else:
+                cell.value = ""
+            # ⚠️ 强制 wrap_text=True: 模板默认 wrap=None 时多行内容会撑高, 这里显式确保换行
+            from openpyxl.styles import Alignment
+            cell.alignment = Alignment(horizontal=cell.alignment.horizontal,
+                                      vertical=cell.alignment.vertical,
+                                      wrap_text=True)
             break
 
-    # 6. 清空数据区残留的空白行（数据行之后、固定内容之前，只清值保留格式）
-    last_used_row = total_row
-    for r in range(last_used_row + 1, fixed_top):
-        for c in range(1, 7 + len(sizes)):
-            ws.cell(row=r, column=c).value = None
+    # 10. 外包装袋贴纸内容（公式实现，动态定位「外包装袋贴纸内容」标签）
+    #     公式: ="款号-颜色-尺码"&CHAR(10)&"名称"&CHAR(10)&"例如:"&CHAR(10)&B2&"-黑色-S"&CHAR(10)&H2
+    #     B2 = 款号, H2 = 名称（实际值由 Excel/WPS 求值得出: 5 行拼接）
+    PACKING_FORMULA = '="款号-颜色-尺码"&CHAR(10)&"名称"&CHAR(10)&"例如:"&CHAR(10)&B2&"-黑色-S"&CHAR(10)&H2'
+    for r in range(fixed_top, min(ws.max_row, 90) + 1):
+        for c in range(1, 16):
+            v = ws.cell(row=r, column=c).value
+            if isinstance(v, str) and "外包装袋贴纸" in v:
+                cell = ws.cell(row=r + 1, column=c)
+                cell.value = PACKING_FORMULA
+                from openpyxl.styles import Alignment
+                cell.alignment = Alignment(horizontal=cell.alignment.horizontal,
+                                          vertical=cell.alignment.vertical,
+                                          wrap_text=True)
+                break
+        else:
+            continue
+        break
+
+    # 11. ⚠️ 删除总计行与包装袋图片之间的空白行（v24 修复）
+    #     注意：必须在所有固定内容写入完成后调用，确保图片锚点和合并区域都已稳定
+    fixed_top = _delete_empty_rows_below(ws, total_row, fixed_top)
 
     # 6. 仅当输入文件/网页提供了替换图时，替换模板中对应位置的图片（模板默认图保留）
     _replace_cell_images(ws, getattr(unit, "images", None) or {})

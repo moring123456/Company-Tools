@@ -38,7 +38,8 @@ class FabricInfo:
     product_name: str = ""
     fabric: str = ""
     pattern: str = ""        # 纸样名称
-    wash_label: str = ""     # 洗水唛成分
+    wash_label: str = ""     # 洗水唛成分（多行字符串，备用）
+    wash_components: List[str] = field(default_factory=list)  # 洗水唛成分列表（每个成分一项，用于公式拼接）
     pcs_per_roll: int = 40   # 每条布出货数
     need_bag: bool = False   # 是否需要压缩袋
     bag_spec: str = ""       # 包装袋规格
@@ -154,6 +155,42 @@ FAB_HEADER_MAP = {
 }
 
 
+def _parse_wash_components(text: str) -> List[str]:
+    """把洗水唛成分字符串解析成「每个成分独占一项」的列表，供生成 Excel 公式拼接用。
+
+    与 _normalize_wash_label 配合：先调用它把同一行的多个成分用 \\n 隔开，再按 \\n 拆分。
+    返回的列表形如 ['35% Rayon', '60% Polyester', '5% Spandex']。
+
+    示例:
+        "95% Polyester5% Spandex" → ['95% Polyester', '5% Spandex']
+        "100% Cotton"             → ['100% Cotton']
+        ""                        → []
+    """
+    if not text:
+        return []
+    normalized = _normalize_wash_label(text)
+    parts = [p.strip() for p in normalized.split("\n")]
+    return [p for p in parts if p]
+
+
+def _normalize_wash_label(text: str) -> str:
+    """洗水唛成分自动换行：每个成分通常以"数字%"开头，
+    在第二个及之后的百分比前插入换行符，使得每个成分独占一行。
+
+    关键启发式：百分比数字前的字符**不能是数字**（避免把 "95%" 误拆成 "9\n5%"），
+    也**不能是换行符**（已有换行的位置不重复加）。
+
+    示例:
+        "95% Polyester5% Spandex" → "95% Polyester\\n5% Spandex"
+        "95% Rayon\\n5% Spandex"  → "95% Rayon\\n5% Spandex"（已换行，原样保留）
+        "100% Cotton"              → "100% Cotton"（单成分，不变）
+    """
+    if not text:
+        return text
+    import re as _re
+    return _re.sub(r'(?<!^)(?<!\n)(?<!\d)(\d+%)', r'\n\1', text).strip()
+
+
 def _parse_fabric(ws, errors: List[Tuple[int, str, str, str]]) -> Dict[str, FabricInfo]:
     fabrics: Dict[str, FabricInfo] = {}
     header_row, col_map = None, {}
@@ -183,12 +220,14 @@ def _parse_fabric(ws, errors: List[Tuple[int, str, str, str]]) -> Dict[str, Fabr
             pass
         need_bag_raw = str(vals.get("need_bag") or "").strip()
         need_bag = need_bag_raw in ("是", "Y", "y", "TRUE", "True", "1", "需要")
+        wash_text = str(vals.get("wash_label") or "").strip()
         fi = FabricInfo(
             style=style,
             product_name=str(vals.get("product_name") or "").strip(),
             fabric=str(vals.get("fabric") or "").strip(),
             pattern=str(vals.get("pattern") or "").strip(),
-            wash_label=str(vals.get("wash_label") or "").strip(),
+            wash_label=_normalize_wash_label(wash_text),
+            wash_components=_parse_wash_components(wash_text),
             pcs_per_roll=ppr,
             need_bag=need_bag,
             bag_spec=str(vals.get("bag_spec") or "").strip(),

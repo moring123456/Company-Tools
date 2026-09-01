@@ -62,6 +62,7 @@ class OrderUnit:
     need_bag: bool
     bag_spec: str
     type_str: str
+    wash_components: List[str] = field(default_factory=list)   # 洗水唛成分列表（按行）
     sizes: List[str] = field(default_factory=list)
     color_rows: List[OrderColorRow] = field(default_factory=list)
     supplier_groups: List[SupplierGroup] = field(default_factory=list)
@@ -141,6 +142,7 @@ def split(data: InputData, mixed_overrides: Dict[str, int] = None) -> SplitResul
             product_name=fi.product_name if fi else "",
             pattern=fi.pattern if fi else "",
             wash_label=fi.wash_label if fi else "",
+            wash_components=fi.wash_components if fi else [],
             factory=factory,
             fabric=fi.fabric if fi else (skus[0].fabric if skus else ""),
             need_bag=fi.need_bag if fi else False,

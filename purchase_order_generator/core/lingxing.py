@@ -23,8 +23,9 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LX_TEMPLATE = os.path.join(BASE_DIR, "templates", "lingxing_template.xlsx")
 
 # 列索引 (1-based)
-COL_ID, COL_ORDER_NO, COL_SUPPLIER, COL_TAX, COL_FEE, COL_CURRENCY, COL_WAREHOUSE, COL_SKU, COL_QTY = \
-    1, 2, 3, 12, 13, 14, 23, 25, 31
+COL_ID, COL_ORDER_NO, COL_SUPPLIER, COL_TAX, COL_FEE, COL_CURRENCY, COL_WAREHOUSE, COL_SKU, COL_QTY, COL_PRICE = \
+    1, 2, 3, 12, 13, 14, 23, 25, 31, 32
+# 含税单价 = AF(32)，填占位符 {{供应商报价}}（由运营在领星导入时手动填入实际报价）
 
 
 def build_lingxing(data: InputData, split_result: SplitResult, out_dir: str) -> str:
@@ -56,6 +57,7 @@ def build_lingxing(data: InputData, split_result: SplitResult, out_dir: str) -> 
         ws.cell(row=r, column=COL_WAREHOUSE, value=data.config.warehouse)
         ws.cell(row=r, column=COL_SKU, value=sr.sku)
         ws.cell(row=r, column=COL_QTY, value=sr.qty)
+        ws.cell(row=r, column=COL_PRICE, value="{{供应商报价}}")  # 含税单价占位符
         r += 1
 
     path = os.path.join(out_dir, f"{date_str}_领星批量导入采购单.xlsx"

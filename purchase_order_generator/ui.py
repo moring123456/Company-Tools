@@ -218,6 +218,60 @@ def render_purchase_order_page():
                 uploaded_imgs[label] = f.read()
 
     st.markdown(f"#### 将生成 **{len(res.units)}** 份采购单文件")
+
+    # 步骤 3.5：可编辑订单列表（用户在生成前可改订单号/纸样编号/采购日期）
+    st.markdown("##### ✏️ 编辑订单信息（改后直接点下方生成即可生效）")
+    st.caption("订单号 = 文件名前缀 · 纸样编号 = 订单 B4 写入值 · 采购日期 = 影响文件名+订单 H5")
+    edit_rows = []
+    for u in res.units:
+        edit_rows.append({
+            "订单号": u.order_no,
+            "款号": u.style,
+            "纸样编号": u.pattern,
+            "工厂": u.factory,
+            "布行": "、".join(g.supplier for g in u.supplier_groups),
+            "采购日期": u.date_str or "",
+            "采购明细": "、".join(f"{cr.color}({cr.total}件)" for cr in u.color_rows),
+        })
+    df_edit = pd.DataFrame(edit_rows)
+    edited = st.data_editor(
+        df_edit, use_container_width=True, hide_index=True,
+        column_config={
+            "订单号": st.column_config.TextColumn(help="改后文件名自动同步"),
+            "款号": st.column_config.TextColumn(disabled=True),
+            "纸样编号": st.column_config.TextColumn(help="写到订单 B4"),
+            "工厂": st.column_config.TextColumn(disabled=True),
+            "布行": st.column_config.TextColumn(disabled=True),
+            "采购明细": st.column_config.TextColumn(disabled=True),
+            "采购日期": st.column_config.TextColumn(help="改后所有订单同步更新日期段+文件名"),
+        },
+        key="order_editor",
+    )
+    # 应用编辑到 res.units
+    for i, u in enumerate(res.units):
+        row = edited.iloc[i]
+        new_date = str(row["采购日期"]).strip() if row["采购日期"] else ""
+        if new_date and new_date != (u.date_str or ""):
+            old_date = u.date_str or ""
+            if old_date and old_date in u.order_no:
+                u.order_no = u.order_no.replace(old_date, new_date, 1)
+            else:
+                # 订单号里没旧日期（极端情况），按 prefix+date+seq 重组
+                import re as _re
+                m = _re.match(r"^([A-Za-z]*)(\d{8})(\d{2,})$", u.order_no)
+                if m:
+                    u.order_no = f"{m.group(1)}{new_date}{m.group(3)}"
+            u.date_str = new_date
+        # 订单号/纸样编号
+        if row["订单号"] and row["订单号"] != u.order_no:
+            u.order_no = str(row["订单号"])
+        if row["纸样编号"] != u.pattern:
+            u.pattern = str(row["纸样编号"])
+        # 文件名始终重新生成（按当前 order_no + style + product_name + type + factory）
+        u.file_name = (
+            f"{u.order_no}-{u.style} {u.product_name} {u.type_str} -{u.factory}.xlsx"
+        ).replace("  ", " ").strip()
+
     preview_rows = []
     for u in res.units:
         preview_rows.append({
