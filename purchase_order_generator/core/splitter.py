@@ -62,6 +62,7 @@ class OrderUnit:
     need_bag: bool
     bag_spec: str
     type_str: str
+    date_str: str = ""               # 文件名中的 8 位日期段 (从输入文件名提取, ui 可编辑)
     wash_components: List[str] = field(default_factory=list)   # 洗水唛成分列表（按行）
     sizes: List[str] = field(default_factory=list)
     color_rows: List[OrderColorRow] = field(default_factory=list)
@@ -148,6 +149,7 @@ def split(data: InputData, mixed_overrides: Dict[str, int] = None) -> SplitResul
             need_bag=fi.need_bag if fi else False,
             bag_spec=fi.bag_spec if fi else "",
             type_str=classify_type([s.sku_name for s in skus]),
+            date_str=date_str,
         )
         color_qty: Dict[str, Dict[str, int]] = {}
         color_remark: Dict[str, set] = {}
