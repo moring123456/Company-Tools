@@ -156,25 +156,47 @@ FAB_HEADER_MAP = {
 
 
 def _parse_wash_components(text: str) -> List[str]:
-    """把洗水唛成分字符串解析成「每个成分独占一项」的列表，供生成 Excel 公式拼接用。
+    """把洗水唛成分字符串解析成「每个成分独占一项」的列表。
 
-    与 _normalize_wash_label 配合：先调用它把同一行的多个成分用 \\n 隔开，再按 \\n 拆分。
-    返回的列表形如 ['35% Rayon', '60% Polyester', '5% Spandex']。
+    输入格式规范（多成分分隔符，v26）：
+      - 支持分隔符：/  +  ,  ，  ;  ；  、  以及换行，多个成分之间填一个即可
+      - 分隔符前后允许任意空格（自动去除）
+      - 也兼容无分隔符连写：'95% Polyester5% Spandex'（按「数字%」启发式切分）
+      - 输出统一：列表每一项 = 一个成分（最终写入 Excel 时用换行符分隔）
 
     示例:
-        "95% Polyester5% Spandex" → ['95% Polyester', '5% Spandex']
-        "100% Cotton"             → ['100% Cotton']
-        ""                        → []
+        "95% Polyester / 5% Spandex" → ['95% Polyester', '5% Spandex']
+        "95% Rayon+5% Spandex"       → ['95% Rayon', '5% Spandex']
+        "95% Polyester，5% Spandex"  → ['95% Polyester', '5% Spandex']
+        "95% Polyester5% Spandex"    → ['95% Polyester', '5% Spandex']（连写兜底）
+        "100% Cotton"                → ['100% Cotton']（单成分）
+        ""                           → []
     """
     if not text:
         return []
+    import re as _re
+    # 1) 有显式分隔符（/ + , ， ; ； 、 换行，前后可带空格）→ 直接切分
+    if _re.search(r'\s*(?:[/+，,;；、]|\n)+\s*', text):
+        parts = [p.strip() for p in _re.split(r'\s*(?:[/+，,;；、]|\n)+\s*', text) if p.strip()]
+    else:
+        parts = [text.strip()] if text.strip() else []
+    # 2) 每段内部可能仍残留「无分隔符连写」，按数字%启发式二次切分
+    out: List[str] = []
+    for p in parts:
+        out.extend(_split_concatenated(p))
+    return out
+
+
+def _split_concatenated(text: str) -> List[str]:
+    """把一个不含显式分隔符、但可能含多个成分的片段，按「数字%」启发式切分。"""
+    if not text:
+        return []
     normalized = _normalize_wash_label(text)
-    parts = [p.strip() for p in normalized.split("\n")]
-    return [p for p in parts if p]
+    return [p.strip() for p in normalized.split("\n") if p.strip()]
 
 
 def _normalize_wash_label(text: str) -> str:
-    """洗水唛成分自动换行：每个成分通常以"数字%"开头，
+    """（连写兜底）成分间无显式分隔符时自动换行：每个成分通常以"数字%"开头，
     在第二个及之后的百分比前插入换行符，使得每个成分独占一行。
 
     关键启发式：百分比数字前的字符**不能是数字**（避免把 "95%" 误拆成 "9\n5%"），
@@ -221,13 +243,14 @@ def _parse_fabric(ws, errors: List[Tuple[int, str, str, str]]) -> Dict[str, Fabr
         need_bag_raw = str(vals.get("need_bag") or "").strip()
         need_bag = need_bag_raw in ("是", "Y", "y", "TRUE", "True", "1", "需要")
         wash_text = str(vals.get("wash_label") or "").strip()
+        wash_components = _parse_wash_components(wash_text)
         fi = FabricInfo(
             style=style,
             product_name=str(vals.get("product_name") or "").strip(),
             fabric=str(vals.get("fabric") or "").strip(),
             pattern=str(vals.get("pattern") or "").strip(),
-            wash_label=_normalize_wash_label(wash_text),
-            wash_components=_parse_wash_components(wash_text),
+            wash_label="\n".join(wash_components),   # 与 components 完全一致（换行分隔）
+            wash_components=wash_components,
             pcs_per_roll=ppr,
             need_bag=need_bag,
             bag_spec=str(vals.get("bag_spec") or "").strip(),
