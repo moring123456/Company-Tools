@@ -219,9 +219,18 @@ def render_purchase_order_page():
 
     st.markdown(f"#### 将生成 **{len(res.units)}** 份采购单文件")
 
+    # ⚠️ 检查洗水唛成分为空的款号（v26：成分缺失 → 洗水唛不写成分，网页提示补全）
+    empty_wash_styles = sorted({u.style for u in res.units if not list(u.wash_components or [])})
+    if empty_wash_styles:
+        st.warning(
+            f"⚠️ **以下款号的「面料表-洗水唛成分」列为空**：{'、'.join(empty_wash_styles)}\n\n"
+            f"这些订单的洗水唛将**不写成分**（只保留 常规洗涤方式 / MADE IN CHINA 两行）。\n"
+            f"如需完整洗水唛，请在输入文件「面料表」E 列补成分后重新上传。"
+        )
+
     # 步骤 3.5：可编辑订单列表（用户在生成前可改订单号/纸样编号/采购日期）
     st.markdown("##### ✏️ 编辑订单信息（改后直接点下方生成即可生效）")
-    st.caption("订单号 = 文件名前缀 · 纸样编号 = 订单 B4 写入值 · 采购日期 = 影响文件名+订单 H5")
+    st.caption("订单号 = 文件名前缀 · 纸样编号 = 订单 B4 写入值 · 采购日期 = 影响文件名+订单/申购单日期（输出显示 YYYY/M/D，如 2026/9/2）")
     edit_rows = []
     for u in res.units:
         edit_rows.append({
@@ -243,7 +252,7 @@ def render_purchase_order_page():
             "工厂": st.column_config.TextColumn(disabled=True),
             "布行": st.column_config.TextColumn(disabled=True),
             "采购明细": st.column_config.TextColumn(disabled=True),
-            "采购日期": st.column_config.TextColumn(help="改后所有订单同步更新日期段+文件名"),
+            "采购日期": st.column_config.TextColumn(help="可填 20260902 或 2026/09/02（输出显示 YYYY/M/D，单数字月/日不补 0，如 2026/9/2），改后所有订单同步更新日期段+文件名"),
         },
         key="order_editor",
     )
@@ -251,6 +260,12 @@ def render_purchase_order_page():
     for i, u in enumerate(res.units):
         row = edited.iloc[i]
         new_date = str(row["采购日期"]).strip() if row["采购日期"] else ""
+        if new_date:
+            # 归一化为 8 位日期段：支持 20260902 / 2026/09/02 / 2026-09-02 任意写法
+            import re as _re_norm
+            _digits = _re_norm.sub(r"\D", "", new_date)
+            if len(_digits) == 8:
+                new_date = _digits
         if new_date and new_date != (u.date_str or ""):
             old_date = u.date_str or ""
             if old_date and old_date in u.order_no:
