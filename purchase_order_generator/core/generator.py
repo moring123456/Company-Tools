@@ -7,9 +7,11 @@
   - 汇总明细表:  独立生成 文件汇总 + 布行明细
 """
 import os
+import re
 import shutil
 import zipfile
 from copy import copy
+from datetime import datetime, date as date_cls
 from typing import Dict, List, Tuple
 
 import openpyxl
@@ -344,6 +346,43 @@ def _find_fixed_top(ws, start_row=8):
     return ws.max_row + 1  # 找不到则用最大行
 
 
+def _to_date_value(value):
+    """把日期值统一转成 date 对象（用于写入订单「日期」/申购单「申请日期」，显示 YYYY/M/D）。
+
+    兼容输入:
+      - 8 位串   '20260902'        -> date(2026, 9, 2)
+      - 带分隔符 '2026/09/02' / '2026-09-02' / '2026.09.02'（ui 手动编辑常见）-> date(2026, 9, 2)
+      - date / datetime 对象直接返回
+    解析失败（含空值）返回原值，不抛异常 —— 避免单个日期异常导致整单生成崩。
+    """
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date_cls):
+        return value
+    s = str(value or "").strip()
+    if not s:
+        return value
+    digits = re.sub(r"\D", "", s)
+    if len(digits) == 8:
+        try:
+            return datetime.strptime(digits, "%Y%m%d").date()
+        except ValueError:
+            return value
+    return value
+
+
+def _write_date_cell(ws, row: int, col: int, value):
+    """写日期值到单元格，并强制 yyyy/m/d 显示格式（真正的日期值，可排序/筛选）。
+    月份/日期为单个数字时不补 0（如 2026/9/2），两位数照常显示（如 2026/10/15）。
+    传入非日期值（如日期串解析失败）则原样写入，不设格式。"""
+    cell = ws.cell(row=row, column=col)
+    dv = _to_date_value(value)
+    cell.value = dv
+    if isinstance(dv, (datetime, date_cls)):
+        cell.number_format = "yyyy/m/d"
+    return cell
+
+
 # ---------- 订单 sheet ----------
 
 def _build_order_sheet(wb, unit: OrderUnit):
@@ -367,7 +406,7 @@ def _build_order_sheet(wb, unit: OrderUnit):
     ws["H3"] = unit.config_brand   # 品牌
     ws["B4"] = unit.pattern        # 做货纸样编号
     ws["B5"] = unit.factory        # 加工厂
-    ws["H5"] = int(unit.date_str) if unit.date_str and str(unit.date_str).isdigit() else unit.date_str  # 日期（数字）
+    _write_date_cell(ws, 5, 8, unit.date_str)  # H5 日期，显示 YYYY/M/D（如 2026/9/2，单数字月/日不补 0）
 
     # 3. 表头：**不重写 A6/B6/L6/M6/N6/O6**（模板已有正确值，含 A6 斜线表头的空格布局）
     #    只写尺码名 C~K（值一致，不碰样式）
@@ -432,8 +471,9 @@ def _build_order_sheet(wb, unit: OrderUnit):
     #                    +常规洗涤方式
     #                    MADE IN CHINA"
     #     用户要求: 不需要公式，直接按 Python 计算结果写值即可——成分取输入文件的
-    #              洗水唛字段（每个成分独占一行），后面固定追加
-    #              "常规洗涤方式" 和 "MADE IN CHINA" 两行。
+    #              洗水唛字段（每个成分独占一行），成分与文字常量之间加一行 "+"，
+    #              最后固定追加 "常规洗涤方式" 和 "MADE IN CHINA"（v26）。
+    #     成分缺失（输入文件未填）→ 不写成分和 "+" 行，只保留两行常量（网页会提示补成分）。
     for r in range(fixed_top, min(ws.max_row, 90) + 1):
         if ws.cell(row=r, column=1).value and "洗水唛" in str(ws.cell(row=r, column=1).value):
             cell = ws.cell(row=r + 1, column=1)
@@ -442,9 +482,11 @@ def _build_order_sheet(wb, unit: OrderUnit):
             if not components and unit.wash_label:
                 components = [p.strip() for p in unit.wash_label.split("\n") if p.strip()]
             if components:
-                cell.value = "\n".join(components + ["常规洗涤方式", "MADE IN CHINA"])
+                # 输出格式（图2）：成分行... / "+" / 常规洗涤方式 / MADE IN CHINA
+                cell.value = "\n".join(components + ["+", "常规洗涤方式", "MADE IN CHINA"])
             else:
-                cell.value = ""
+                # 成分为空：不写成分行和 "+"，只保留固定常量
+                cell.value = "\n".join(["常规洗涤方式", "MADE IN CHINA"])
             # ⚠️ 强制 wrap_text=True: 模板默认 wrap=None 时多行内容会撑高, 这里显式确保换行
             from openpyxl.styles import Alignment
             cell.alignment = Alignment(horizontal=cell.alignment.horizontal,
@@ -515,7 +557,7 @@ def _build_supplier_sheet(wb, unit: OrderUnit, group):
     new_ws["B4"] = unit.fabric   # 品名
     new_ws["D4"] = unit.factory  # 代加工工厂
     new_ws["B8"] = unit.config_applicant
-    new_ws["D8"] = unit.date_str
+    _write_date_cell(new_ws, 8, 4, unit.date_str)   # D8 申请日期，显示 YYYY/M/D
 
     # 数据行（R6 起，模板 R6 是第 1 条数据）
     data_start = 6
@@ -550,7 +592,7 @@ def _build_supplier_sheet(wb, unit: OrderUnit, group):
     new_ws.cell(row=total_row + 1, column=1, value="申请人")
     new_ws.cell(row=total_row + 1, column=2, value=unit.config_applicant)
     new_ws.cell(row=total_row + 1, column=3, value="申请日期")
-    new_ws.cell(row=total_row + 1, column=4, value=unit.date_str)
+    _write_date_cell(new_ws, total_row + 1, 4, unit.date_str)   # 申请日期，显示 YYYY/M/D
     # 合计行 / 申请人行 应用与数据行一致的样式（字体/对齐/边框/行高）
     for rr in (total_row, total_row + 1):
         for c in range(1, 5):
