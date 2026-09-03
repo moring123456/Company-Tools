@@ -28,6 +28,8 @@ class SKURow:
     factory: str = ""
     supplier: str = ""       # 布行（混搭色含逗号两个）
     fabric: str = ""         # 品名
+    article_no: str = ""     # 货号（可选列，v30 新增；同布行填同值）
+    weight: str = ""         # 重量（可选列，v30 新增；同布行填同值）
     remark: str = ""
     row_no: int = 0          # 输入表行号（报错定位用）
 
@@ -92,7 +94,8 @@ MAIN_HEADER_MAP = {
     "款号": "style", "sku编码": "sku", "sku名称": "sku_name", "颜色": "color",
     "尺码": "size", "采购数": "qty", "采购数量": "qty", "采购": "qty",
     "工厂": "factory", "加工厂": "factory", "布行": "supplier",
-    "品名": "fabric", "面料名": "fabric", "备注": "remark",
+    "品名": "fabric", "面料名": "fabric", "货号": "article_no", "重量": "weight",
+    "备注": "remark",
 }
 
 
@@ -118,7 +121,7 @@ def _parse_main(ws, errors: List[Tuple[int, str, str, str]]) -> List[SKURow]:
     required = ["style", "sku", "sku_name", "color", "size", "qty", "factory", "supplier", "fabric", "remark"]
     missing = [f for f in required if f not in col_map]
     if missing:
-        errors.append((header_row, "主表", f"缺少列: {','.join(missing)}", "表头需 10 列齐全"))
+        errors.append((header_row, "主表", f"缺少列: {','.join(missing)}", "表头需 款号/SKU编码/.../备注 等列齐全（货号/重量为可选列）"))
     for r in range(header_row + 1, ws.max_row + 1):
         vals = [ws.cell(row=r, column=c + 1).value for c in range(max(col_map.values()) + 1) if True]
         # 读取该行列值
@@ -139,6 +142,7 @@ def _parse_main(ws, errors: List[Tuple[int, str, str, str]]) -> List[SKURow]:
             sku_name=row_vals.get("sku_name", ""), color=row_vals.get("color", ""),
             size=row_vals.get("size", ""), qty=qty, factory=row_vals.get("factory", ""),
             supplier=row_vals.get("supplier", ""), fabric=row_vals.get("fabric", ""),
+            article_no=row_vals.get("article_no", ""), weight=row_vals.get("weight", ""),
             remark=row_vals.get("remark", ""), row_no=r,
         )
         rows.append(sr)
