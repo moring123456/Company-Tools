@@ -43,6 +43,8 @@ class SupplierSheetRow:
 class SupplierGroup:
     supplier: str
     fabric: str                      # 款级品名
+    article_no: str = ""             # 货号（v30: 从主表可选列带过来，同布行取第一个非空）
+    weight: str = ""                 # 重量（v30: 同上）
     rows: List[SupplierSheetRow] = field(default_factory=list)
 
     @property
@@ -163,6 +165,20 @@ def split(data: InputData, mixed_overrides: Dict[str, int] = None) -> SplitResul
         # 4. 申购条目（按 SKU 行拆，混搭拆两半）
         #    entry = (supplier, color, qty, original_color)
         entries: List[Tuple[str, str, int, str]] = []
+        # v30: 布行 → 第一个非空 (货号, 重量)。两字段分开取首个非空（可一行只填其一）
+        supplier_meta: Dict[str, List[str]] = {}   # supplier -> [article_no, weight]
+
+        def _collect_meta(sup: str, sr: SKURow):
+            if not sup:
+                return
+            if sup not in supplier_meta:
+                supplier_meta[sup] = ["", ""]
+            cur = supplier_meta[sup]
+            if not cur[0] and sr.article_no:
+                cur[0] = sr.article_no
+            if not cur[1] and sr.weight:
+                cur[1] = sr.weight
+
         for sr in skus:
             q = max(sr.qty, 0)
             if is_mixed_color(sr.color):
@@ -175,8 +191,10 @@ def split(data: InputData, mixed_overrides: Dict[str, int] = None) -> SplitResul
                     q2 = q - q1
                 p1, p2 = split_mixed_color(sr.color)
                 entries.append((s1, p1, q1, sr.color))
+                _collect_meta(s1, sr)
                 if s2 and q2:
                     entries.append((s2, p2, q2, sr.color))
+                    _collect_meta(s2, sr)
                 result.mixed_splits.append({
                     "order_no": unit.order_no, "style": style, "factory": factory,
                     "original_color": sr.color, "sku": sr.sku,
@@ -186,6 +204,7 @@ def split(data: InputData, mixed_overrides: Dict[str, int] = None) -> SplitResul
                 })
             else:
                 entries.append((sr.supplier, sr.color, q, sr.color))
+                _collect_meta(sr.supplier, sr)
 
         # 5. 布行聚合
         supplier_agg: Dict[str, Dict[str, int]] = {}
@@ -197,7 +216,9 @@ def split(data: InputData, mixed_overrides: Dict[str, int] = None) -> SplitResul
 
         # 6. 生成申购单分组
         for sup in sorted(supplier_agg.keys(), key=lambda x: list(supplier_agg.keys()).index(x)):
-            group = SupplierGroup(supplier=sup, fabric=unit.fabric)
+            art, wt = supplier_meta.get(sup, ["", ""])
+            group = SupplierGroup(supplier=sup, fabric=unit.fabric,
+                                  article_no=art, weight=wt)
             for color, q in supplier_agg[sup].items():
                 group.rows.append(SupplierSheetRow(color=color, qty=q, rolls=rolls(q, pcs), supplier=sup))
             unit.supplier_groups.append(group)
