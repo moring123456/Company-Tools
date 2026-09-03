@@ -552,8 +552,8 @@ def _build_supplier_sheet(wb, unit: OrderUnit, group):
     # 填头部
     new_ws["B2"] = unit.order_no
     new_ws["D2"] = unit.style
-    new_ws["B3"] = ""            # 货号 留空
-    new_ws["D3"] = ""            # 重量 留空
+    new_ws["B3"] = group.article_no or ""   # 货号（v30: 从主表可选列带过来，无值留空）
+    new_ws["D3"] = group.weight or ""       # 重量（v30: 同上）
     new_ws["B4"] = unit.fabric   # 品名
     new_ws["D4"] = unit.factory  # 代加工工厂
     new_ws["B8"] = unit.config_applicant
