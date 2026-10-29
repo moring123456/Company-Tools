@@ -14,7 +14,7 @@ from datetime import date
 from .calc import (SIZE_ORDER, classify_type, gcd_ratio, half_split,
                    is_mixed_color, rolls, sort_sizes, split_mixed_color,
                    split_suppliers)
-from .parser import InputData, SKURow
+from .parser import InputData, SKURow, match_factory
 
 
 # ---------- 数据结构 ----------
@@ -42,9 +42,8 @@ class SupplierSheetRow:
 @dataclass
 class SupplierGroup:
     supplier: str
-    fabric: str                      # 款级品名
-    article_no: str = ""             # 货号（v30: 从主表可选列带过来，同布行取第一个非空）
-    weight: str = ""                 # 重量（v30: 同上）
+    fabric: str                      # 款级品名（主表 I 列，直接写入布料申购单「品名」）
+    weight: str = ""                 # 重量（保留字段，暂不输出）
     rows: List[SupplierSheetRow] = field(default_factory=list)
 
     @property
@@ -71,6 +70,13 @@ class OrderUnit:
     supplier_groups: List[SupplierGroup] = field(default_factory=list)
     total_qty: int = 0
     file_name: str = ""
+    # v32: 工厂信息（配置表「工厂信息表」按简称匹配全称）
+    factory_full: str = ""           # 工厂全称，如 嘉品服饰
+    factory_contact: str = ""        # 联系人
+    factory_phone: str = ""          # 联系电话
+    factory_address: str = ""        # 工厂地址
+    # v32: SKU 明细（送厂送货清单预填用）
+    sku_items: List[Dict] = field(default_factory=list)   # [{sku,color,size,qty}]
 
 
 @dataclass
@@ -165,19 +171,17 @@ def split(data: InputData, mixed_overrides: Dict[str, int] = None) -> SplitResul
         # 4. 申购条目（按 SKU 行拆，混搭拆两半）
         #    entry = (supplier, color, qty, original_color)
         entries: List[Tuple[str, str, int, str]] = []
-        # v30: 布行 → 第一个非空 (货号, 重量)。两字段分开取首个非空（可一行只填其一）
-        supplier_meta: Dict[str, List[str]] = {}   # supplier -> [article_no, weight]
+        # v32: 布行 → 重量（可选，保留不输出）
+        supplier_meta: Dict[str, List[str]] = {}   # supplier -> [weight]
 
         def _collect_meta(sup: str, sr: SKURow):
             if not sup:
                 return
             if sup not in supplier_meta:
-                supplier_meta[sup] = ["", ""]
+                supplier_meta[sup] = [""]
             cur = supplier_meta[sup]
-            if not cur[0] and sr.article_no:
-                cur[0] = sr.article_no
-            if not cur[1] and sr.weight:
-                cur[1] = sr.weight
+            if not cur[0] and sr.weight:
+                cur[0] = sr.weight
 
         for sr in skus:
             q = max(sr.qty, 0)
@@ -216,9 +220,8 @@ def split(data: InputData, mixed_overrides: Dict[str, int] = None) -> SplitResul
 
         # 6. 生成申购单分组
         for sup in sorted(supplier_agg.keys(), key=lambda x: list(supplier_agg.keys()).index(x)):
-            art, wt = supplier_meta.get(sup, ["", ""])
-            group = SupplierGroup(supplier=sup, fabric=unit.fabric,
-                                  article_no=art, weight=wt)
+            wt = supplier_meta.get(sup, [""])[0]
+            group = SupplierGroup(supplier=sup, fabric=unit.fabric, weight=wt)
             for color, q in supplier_agg[sup].items():
                 group.rows.append(SupplierSheetRow(color=color, qty=q, rolls=rolls(q, pcs), supplier=sup))
             unit.supplier_groups.append(group)
@@ -254,6 +257,22 @@ def split(data: InputData, mixed_overrides: Dict[str, int] = None) -> SplitResul
 
         # 尺码固定为 S~6XL 全部 9 列（用户要求写死，不随数据变动）
         unit.sizes = list(SIZE_ORDER)
+
+        # v32: 工厂信息（配置表「工厂信息表」按简称匹配全称，供申购单/送货清单使用）
+        f_info = match_factory(data.config, factory)
+        unit.factory_full = f_info.name or factory
+        unit.factory_contact = f_info.contact
+        unit.factory_phone = f_info.phone
+        unit.factory_address = f_info.address
+
+        # v32: SKU 明细（工厂送货清单预填：颜色按订单行顺序、尺码按 S~6XL 顺序）
+        size_idx = {s: i for i, s in enumerate(SIZE_ORDER)}
+        color_idx = {cr.color: i for i, cr in enumerate(unit.color_rows)}
+        ordered = sorted(skus, key=lambda s: (color_idx.get(s.color, 999), size_idx.get(s.size, 99)))
+        unit.sku_items = [
+            {"sku": s.sku, "color": s.color, "size": s.size, "qty": max(s.qty, 0)}
+            for s in ordered if max(s.qty, 0) > 0
+        ]
         unit.total_qty = sum(cr.total for cr in unit.color_rows)
         unit.file_name = f"{unit.order_no}-{style} {unit.product_name} {unit.type_str} -{factory}.xlsx".replace("  ", " ")
         result.units.append(unit)
