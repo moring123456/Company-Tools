@@ -27,11 +27,19 @@ class SKURow:
     qty: int = 0
     factory: str = ""
     supplier: str = ""       # 布行（混搭色含逗号两个）
-    fabric: str = ""         # 品名
-    article_no: str = ""     # 货号（可选列，v30 新增；同布行填同值）
-    weight: str = ""         # 重量（可选列，v30 新增；同布行填同值）
+    fabric: str = ""         # 品名（订单/汇总/布料申购单 统一使用）
+    weight: str = ""         # 重量（保留，可选列，暂不输出）
     remark: str = ""
     row_no: int = 0          # 输入表行号（报错定位用）
+
+
+@dataclass
+class FactoryInfo:
+    """配置表「工厂信息表」一行"""
+    name: str = ""       # 工厂名称（全称，如 嘉品服饰）
+    phone: str = ""      # 联系方式
+    address: str = ""    # 工厂地址
+    contact: str = ""    # 联系人
 
 
 @dataclass
@@ -53,7 +61,8 @@ class Config:
     account_code: str = ""
     applicant: str = ""
     office: str = ""
-    warehouse: str = ""   # 采购仓库（领星批量导入用）
+    warehouse: str = ""   # 采购仓库（领星批量导入 + 送货清单「送货仓库」）
+    factories: Dict[str, FactoryInfo] = field(default_factory=dict)  # 工厂名称(全称) → 信息
 
 
 @dataclass
@@ -91,10 +100,11 @@ def _find_sheet(wb, keywords: List[str], fallback_idx: int):
 # ---------- 主表解析 ----------
 
 MAIN_HEADER_MAP = {
+    # ⚠️ 更具体的列名必须放在前面（匹配用 `key in 表头`，先命中者生效）
     "款号": "style", "sku编码": "sku", "sku名称": "sku_name", "颜色": "color",
     "尺码": "size", "采购数": "qty", "采购数量": "qty", "采购": "qty",
     "工厂": "factory", "加工厂": "factory", "布行": "supplier",
-    "品名": "fabric", "面料名": "fabric", "货号": "article_no", "重量": "weight",
+    "品名": "fabric", "面料名": "fabric", "重量": "weight",
     "备注": "remark",
 }
 
@@ -112,6 +122,9 @@ def _parse_main(ws, errors: List[Tuple[int, str, str, str]]) -> List[SKURow]:
                 v_low = v.lower().replace(" ", "")
                 for key, field_name in MAIN_HEADER_MAP.items():
                     if key in v_low:
+                        # 只保留第一个「品名」列（旧模板可能有两个品名列，第 2 个忽略）
+                        if field_name in col_map:
+                            break
                         col_map[field_name] = idx
                         break
             break
@@ -142,7 +155,7 @@ def _parse_main(ws, errors: List[Tuple[int, str, str, str]]) -> List[SKURow]:
             sku_name=row_vals.get("sku_name", ""), color=row_vals.get("color", ""),
             size=row_vals.get("size", ""), qty=qty, factory=row_vals.get("factory", ""),
             supplier=row_vals.get("supplier", ""), fabric=row_vals.get("fabric", ""),
-            article_no=row_vals.get("article_no", ""), weight=row_vals.get("weight", ""),
+            weight=row_vals.get("weight", ""),
             remark=row_vals.get("remark", ""), row_no=r,
         )
         rows.append(sr)
@@ -274,7 +287,16 @@ CONFIG_KEYS = {
 
 def _parse_config(ws) -> Config:
     cfg = Config()
-    for r in range(1, min(ws.max_row, 30) + 1):
+    fac_header_row = None
+    for r in range(1, min(ws.max_row, 60) + 1):
+        k = ws.cell(row=r, column=1).value
+        if k is not None and "工厂名称" in str(k).strip():
+            fac_header_row = r
+            break
+
+    # 键值区（工厂信息表之前的行）
+    key_end = (fac_header_row - 1) if fac_header_row else min(ws.max_row, 60)
+    for r in range(1, key_end + 1):
         k = ws.cell(row=r, column=1).value
         v = ws.cell(row=r, column=2).value
         if k is None:
@@ -284,7 +306,38 @@ def _parse_config(ws) -> Config:
             if key in k_low:
                 setattr(cfg, field_name, str(v).strip() if v is not None else "")
                 break
+
+    # 工厂信息表：A工厂名称 B联系方式 C工厂地址 D联系人
+    if fac_header_row:
+        for r in range(fac_header_row + 1, ws.max_row + 1):
+            name = ws.cell(row=r, column=1).value
+            if name is None or not str(name).strip():
+                continue
+            fi = FactoryInfo(
+                name=str(name).strip(),
+                phone=str(ws.cell(row=r, column=2).value or "").strip(),
+                address=str(ws.cell(row=r, column=3).value or "").strip(),
+                contact=str(ws.cell(row=r, column=4).value or "").strip(),
+            )
+            cfg.factories[fi.name] = fi
     return cfg
+
+
+def match_factory(cfg: Config, factory: str) -> FactoryInfo:
+    """按主表工厂名（常为简称，如「嘉品」）匹配配置表工厂信息（全称「嘉品服饰」）。
+    匹配顺序：全等 → 工厂表全称以简称开头 → 简称以工厂表名开头 → 互相包含。"""
+    name = (factory or "").strip()
+    if not name or not cfg.factories:
+        return FactoryInfo(name=name)
+    if name in cfg.factories:
+        return cfg.factories[name]
+    for full, fi in cfg.factories.items():
+        if full.startswith(name) or name.startswith(full):
+            return fi
+    for full, fi in cfg.factories.items():
+        if name in full or full in name:
+            return fi
+    return FactoryInfo(name=name)
 
 
 # ---------- 校验 ----------
