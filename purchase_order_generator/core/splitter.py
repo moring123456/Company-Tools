@@ -196,9 +196,11 @@ def split(data: InputData, mixed_overrides: Dict[str, int] = None) -> SplitResul
                 p1, p2 = split_mixed_color(sr.color)
                 entries.append((s1, p1, q1, sr.color))
                 _collect_meta(s1, sr)
-                if s2 and q2:
-                    entries.append((s2, p2, q2, sr.color))
-                    _collect_meta(s2, sr)
+                if q2:
+                    # 混搭色必须配 2 个布行（每个颜色各 1 条布）；若漏填，后段归到同一布行，
+                    # 保证件数不丢（正常流程在 validate() 已阻断并提示修正）
+                    entries.append((s2 or s1, p2, q2, sr.color))
+                    _collect_meta(s2 or s1, sr)
                 result.mixed_splits.append({
                     "order_no": unit.order_no, "style": style, "factory": factory,
                     "original_color": sr.color, "sku": sr.sku,
@@ -226,15 +228,16 @@ def split(data: InputData, mixed_overrides: Dict[str, int] = None) -> SplitResul
                 group.rows.append(SupplierSheetRow(color=color, qty=q, rolls=rolls(q, pcs), supplier=sup))
             unit.supplier_groups.append(group)
 
-        # 7. 生成订单颜色行（条数 = 各布行该颜色聚合后条数合计，保证文件内自洽）
-        color_orig: Dict[Tuple[str, str], str] = {}   # (supplier, color) -> 原色
-        for sup, color, _q, orig in entries:
-            color_orig[(sup, color)] = orig
+        # 7. 生成订单颜色行
+        #    条数算法（v34）：该行件数 ÷ 每条布出货数，各行独立、不按布行合并分配
+        #    混搭色额外约束：至少 2 条（前后两个颜色各有 1 条布）
         color_rolls: Dict[str, int] = {}
-        for sup, agg in supplier_agg.items():
-            for color, q in agg.items():
-                orig = color_orig.get((sup, color), color)
-                color_rolls[orig] = color_rolls.get(orig, 0) + rolls(q, pcs)
+        for color, qbs in color_qty.items():
+            total_q = sum(qbs.values())
+            c_roll = rolls(total_q, pcs)
+            if is_mixed_color(color) and total_q > 0:
+                c_roll = max(2, c_roll)
+            color_rolls[color] = c_roll
 
         # 记录输入顺序用于稳定排序（订单数相同时保持输入顺序）
         input_order = {color: i for i, color in enumerate(color_qty.keys())}
@@ -278,3 +281,42 @@ def split(data: InputData, mixed_overrides: Dict[str, int] = None) -> SplitResul
         result.units.append(unit)
 
     return result
+
+
+# ---------- 计划下单数校验 ----------
+
+def check_pcs_multiple(result: SplitResult, data: InputData) -> List[Dict]:
+    """检查「计划下单数」是否为面料表「每条布出货数」的整数倍。
+
+    检查粒度 = 申购单的每一行（布行 × 颜色），即真正向布行下单的最小单元：
+      - 非混搭色：该颜色各尺码件数合计
+      - 混搭色：按拆分后的「前段 / 后段」分别检查（各自对应一个布行）
+
+    返回不满足的明细列表（空列表 = 全部合规）。
+    不阻断生成，只提示用户把件数调到整数倍，避免买半条布造成浪费。
+    """
+    bad: List[Dict] = []
+    for unit in result.units:
+        fi = data.fabrics.get(unit.style)
+        pcs = fi.pcs_per_roll if fi else 40
+        if not pcs or pcs <= 0:
+            pcs = 40
+        for g in unit.supplier_groups:
+            for r in g.rows:
+                if r.qty <= 0 or r.qty % pcs == 0:
+                    continue
+                down = (r.qty // pcs) * pcs
+                up = down + pcs
+                bad.append({
+                    "订单号": unit.order_no,
+                    "款号": unit.style,
+                    "布行": g.supplier,
+                    "色号&颜色": r.color,
+                    "计划下单数": r.qty,
+                    "每条布出货数": pcs,
+                    "余数": r.qty % pcs,
+                    "当前条数": rolls(r.qty, pcs),
+                    "向上对齐": f"{up}（+{up - r.qty}）",
+                    "向下对齐": f"{down}（-{r.qty - down}）" if down > 0 else "—",
+                })
+    return bad
