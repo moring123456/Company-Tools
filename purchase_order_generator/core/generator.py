@@ -16,7 +16,8 @@ from typing import Dict, List, Tuple
 
 import openpyxl
 from openpyxl.utils import get_column_letter
-from openpyxl.styles import Border, Side, Font, Alignment
+from openpyxl.styles import Border, Side, Font, Alignment, PatternFill
+from openpyxl.styles.colors import Color
 from openpyxl.drawing.image import Image as XLImage
 
 from .splitter import OrderUnit, SplitResult
@@ -29,6 +30,20 @@ IMAGES_DIR = os.path.join(BASE_DIR, "templates", "images")
 
 THIN = Side(style="thin", color="000000")
 BOX = Border(left=THIN, right=THIN, top=THIN, bottom=THIN)
+
+# ---------- 配色（完全对齐用户示范文件的主题色，不可随意改动） ----------
+# 主题索引：0=背景1 1=文字1 2=背景2 3=文字2 4=主题色1(蓝) 5=主题色2(橙)
+#           6=主题色3(黄) 7=主题色4(绿) 8=主题色5(青) 9=主题色6(红)
+# tint 越大越浅：0.4 为表头/标题底色，0.8 为正文底色
+def theme_fill(theme: int, tint: float) -> PatternFill:
+    """按主题色 + 明度生成实心填充（换主题/护眼模式时仍保持层次）"""
+    return PatternFill(fill_type="solid", fgColor=Color(theme=theme, tint=tint))
+
+
+FILL_HEAD = theme_fill(4, 0.4)   # 表头蓝（订单表头、申购单标题、裁床区表头）
+FILL_BODY = theme_fill(4, 0.8)   # 正文浅蓝（订单数据区、申购单正文、裁床区数据）
+FILL_GRAY = theme_fill(0, -0.15)  # 浅灰（送货单「本次质检数量」格）
+RED_FONT = "FFFF0000"            # 工厂/手工填写项用红色提示
 
 # 模板内嵌图片（DISPIMG）→ 普通图片插回：位置名 / 默认图片ID / 目标紧凑尺寸(px)
 # 比 THD 模板原 DISPIMG ext 更小（模板原图过大导致超出视觉区域）
@@ -385,6 +400,64 @@ def _write_date_cell(ws, row: int, col: int, value):
 
 # ---------- 订单 sheet ----------
 
+# 裁床数量区块（v32）：R列颜色 + S~AA 九个尺码 + AB汇总
+CUT_COL_START = 18          # R
+CUT_SIZE_START = 19         # S
+CUT_SUM_COL = 28            # AB
+YELLOW_FILL = PatternFill(start_color="FFFFFF00", end_color="FFFFFF00", fill_type="solid")
+
+
+def _build_cut_block(ws, sizes, data_start: int, n_rows: int, total_row: int):
+    """订单页右侧「裁床数量(工厂填写）」区块：行数与订单颜色行对齐。
+    R列=颜色(公式取A列)，S~AA=9个尺码(公式取表头 C6~K6)，AB列=汇总。
+    配色与左侧主表一致：R4:R7 表头蓝(T4/0.4)、R8 起正文浅蓝(T4/0.8)、汇总列表头黄。
+    """
+    c0 = CUT_COL_START
+    c_sum = CUT_SUM_COL
+
+    # 列宽
+    ws.column_dimensions[get_column_letter(c0)].width = 44.64
+    for i in range(len(sizes)):
+        ws.column_dimensions[get_column_letter(CUT_SIZE_START + i)].width = 13.0
+    ws.column_dimensions[get_column_letter(c_sum)].width = 16.13
+
+    # 1. 先整块铺底色 + 细边框（之后再写字号，避免被这层底色覆盖掉字号）
+    for r in range(4, total_row + 1):
+        fill = FILL_HEAD if r <= 7 else FILL_BODY
+        for c in range(c0, c_sum + 1):
+            _std_cell(ws, r, c, fill=fill)
+
+    # 2. 合并：标题 R4:AB5 / R6:R7 颜色 / 尺码列 / 汇总列
+    ws.merge_cells(start_row=4, start_column=c0, end_row=5, end_column=c_sum)
+    ws.merge_cells(start_row=6, start_column=c0, end_row=7, end_column=c0)
+    for i in range(len(sizes)):
+        col = CUT_SIZE_START + i
+        ws.merge_cells(start_row=6, start_column=col, end_row=7, end_column=col)
+    ws.merge_cells(start_row=6, start_column=c_sum, end_row=7, end_column=c_sum)
+
+    # 3. 标题 + 表头（字号在这时候写，才不会被第 1 步的默认字号冲掉）
+    _std_cell(ws, 4, c0, "裁床数量(工厂填写）", size=22, bold=True, fill=FILL_HEAD)
+    _std_cell(ws, 6, c0, "颜色尺码", size=24, wrap=True, fill=FILL_HEAD)
+    for i in range(len(sizes)):
+        # 引用订单表头上的尺码（C6 起）
+        _std_cell(ws, 6, CUT_SIZE_START + i, f"={get_column_letter(3 + i)}6",
+                  size=16, fill=FILL_HEAD)
+    _std_cell(ws, 6, c_sum, "汇总", size=16, fill=YELLOW_FILL)
+
+    # 4. 数据行（与订单颜色行对齐）+ 汇总行
+    size_first = get_column_letter(CUT_SIZE_START)
+    size_last = get_column_letter(CUT_SIZE_START + len(sizes) - 1)
+    for r in range(data_start, total_row + 1):
+        is_total = (r == total_row)
+        _std_cell(ws, r, c0, "汇总" if is_total else f'=IF($A{r}="","",$A{r})',
+                  size=16, fill=FILL_BODY)
+        for i in range(len(sizes)):
+            _std_cell(ws, r, CUT_SIZE_START + i, size=16, fill=FILL_BODY)
+        _std_cell(ws, r, c_sum,
+                  f'=IF(SUM({size_first}{r}:{size_last}{r})=0,"",SUM({size_first}{r}:{size_last}{r}))',
+                  size=16, fill=FILL_BODY)
+
+
 def _build_order_sheet(wb, unit: OrderUnit):
     """以样板为底版，**只写数据，完全不动格式**（列宽/行高/合并/边框/填充全部保留样板原样）。
     数据区布局（样板固定）：C~K=9尺码(S~6XL), L=比例, M=总计, N=布料条数, O=备注
@@ -517,94 +590,218 @@ def _build_order_sheet(wb, unit: OrderUnit):
     #     注意：必须在所有固定内容写入完成后调用，确保图片锚点和合并区域都已稳定
     fixed_top = _delete_empty_rows_below(ws, total_row, fixed_top)
 
+    # 11.5 v32: 右侧「裁床数量(工厂填写）」区块（行数与颜色行对齐，汇总列 AB）
+    _build_cut_block(ws, sizes, start, n, total_row)
+
     # 6. 仅当输入文件/网页提供了替换图时，替换模板中对应位置的图片（模板默认图保留）
     _replace_cell_images(ws, getattr(unit, "images", None) or {})
     return ws
 
 
-# ---------- 布料申购单 sheet ----------
+# ---------- 布料申购单 sheet（v32 新版布局） ----------
+
+SHEET_FONT = "微软雅黑"
+
+
+def _std_cell(ws, row, col, value=None, size=11, bold=False, wrap=None,
+              h="center", v="center", fill=None, border=BOX, color=None):
+    """写一个标准样式的单元格（微软雅黑 + 细边框 + 居中）"""
+    c = ws.cell(row=row, column=col)
+    if value is not None:
+        c.value = value
+    c.font = Font(name=SHEET_FONT, size=size, bold=bold, color=color)
+    c.alignment = Alignment(horizontal=h, vertical=v, wrap_text=wrap)
+    if fill is not None:
+        c.fill = fill
+    if border is not None:
+        c.border = border
+    return c
+
 
 def _build_supplier_sheet(wb, unit: OrderUnit, group):
-    """从 PPY 模板布料申购单复制样式并生成一个布行申购单 sheet"""
-    src = openpyxl.load_workbook(PPY_TEMPLATE, data_only=False)
-    src_ws = src["布料申购单"]
-    new_ws = wb.create_sheet(title=f"布料申购单-{group.supplier}")
+    """布料申购单（v32 布局）：
+    R1 标题 / R2 订单号·款号 / R3 品名·代加工工厂 / R4 联系人·联系电话 / R5 联系地址
+    R6 表头 / R7~ 数据行(至少14行) / 合计行 / 申请人行
+    配色：标题带 T4/0.4 深一档，正文 T4/0.8 浅蓝，需核对的值用红字。
+    """
+    ws = wb.create_sheet(title=f"布料申购单-{group.supplier}")
 
-    # 复制列宽
-    for col, dim in src_ws.column_dimensions.items():
-        new_ws.column_dimensions[col].width = dim.width
-    # 复制行高 + 单元格值/样式（仅左块 A~D 列 + 表头，右块 H~K 不复制）
-    for row in src_ws.iter_rows(min_row=1, max_row=src_ws.max_row, max_col=4):
-        for c in row:
-            if c.value is not None:
-                new_ws.cell(row=c.row, column=c.column, value=c.value)
-            if c.has_style:
-                new_ws.cell(row=c.row, column=c.column).font = copy(c.font)
-                new_ws.cell(row=c.row, column=c.column).border = copy(c.border)
-                new_ws.cell(row=c.row, column=c.column).fill = copy(c.fill)
-                new_ws.cell(row=c.row, column=c.column).alignment = copy(c.alignment)
-            new_ws.row_dimensions[c.row].height = src_ws.row_dimensions[c.row].height
-    # 复制左块合并单元格（A1:D1, A2:D2... 检查）
-    for mr in src_ws.merged_cells.ranges:
-        if mr.min_col <= 4:   # 只复制左块
-            new_ws.merge_cells(str(mr))
+    for col, w in {"A": 21.875, "B": 23.5, "C": 11.875, "D": 30.875}.items():
+        ws.column_dimensions[col].width = w
 
-    # 填头部
-    new_ws["B2"] = unit.order_no
-    new_ws["D2"] = unit.style
-    new_ws["B3"] = group.article_no or ""   # 货号（v30: 从主表可选列带过来，无值留空）
-    new_ws["D3"] = group.weight or ""       # 重量（v30: 同上）
-    new_ws["B4"] = unit.fabric   # 品名
-    new_ws["D4"] = unit.factory  # 代加工工厂
-    new_ws["B8"] = unit.config_applicant
-    _write_date_cell(new_ws, 8, 4, unit.date_str)   # D8 申请日期，显示 YYYY/M/D
+    heights = {1: 24.0, 2: 25.5, 3: 25.5, 4: 25.5, 5: 19.5, 6: 27.0}
+    for r, hh in heights.items():
+        ws.row_dimensions[r].height = hh
 
-    # 数据行（R6 起，模板 R6 是第 1 条数据）
-    data_start = 6
-    rows = group.rows
-    need = len(rows)
-    # 模板数据行从 R6 到 R6（1 行），合计在 R7，申请人在 R8
-    # 插入额外行使数据区容纳所有颜色
-    if need > 1:
-        new_ws.insert_rows(data_start + 1, need - 1)
-    # 以 R6 为样式基准，复制到所有数据行（修复 insert_rows 后样式不一致）
-    for i, sr in enumerate(rows):
+    # 标题（合并区先铺底色，最后再写字，保证 16 号字不被覆盖）
+    ws.merge_cells("A1:D1")
+    for c in range(1, 5):
+        _std_cell(ws, 1, c, fill=FILL_HEAD)
+    _std_cell(ws, 1, 1, "布料申购单", size=16, fill=FILL_HEAD)
+
+    # 头部：标签 + 值（值为红色，提示需要核对）
+    rows = [
+        (2, "订单号", unit.order_no, "款号", unit.style),
+        (3, "品名", group.fabric or unit.fabric, "代加工工厂", unit.factory_full or unit.factory),
+        (4, "联系人", unit.factory_contact, "联系电话", unit.factory_phone),
+    ]
+    for r, l1, v1, l2, v2 in rows:
+        _std_cell(ws, r, 1, l1, bold=True, fill=FILL_BODY)
+        _std_cell(ws, r, 2, v1, bold=True, color=RED_FONT, fill=FILL_BODY)
+        _std_cell(ws, r, 3, l2, bold=True, fill=FILL_BODY)
+        _std_cell(ws, r, 4, v2, bold=True, color=RED_FONT, fill=FILL_BODY)
+        ws.row_dimensions[r].height = 25.5
+
+    # 联系地址（B5:D5 合并）
+    _std_cell(ws, 5, 1, "联系地址", bold=True, fill=FILL_BODY)
+    for c in range(2, 5):
+        _std_cell(ws, 5, c, fill=FILL_BODY)
+    ws.merge_cells("B5:D5")
+    _std_cell(ws, 5, 2, unit.factory_address, fill=FILL_BODY)
+    ws.row_dimensions[5].height = 19.5
+
+    # 表头（色号&颜色 / 数量 12 号，布行 / 备注 11 号，与示范文件一致）
+    for i, head in enumerate(["色号&颜色", "数量（条）", "布行", "备注"], start=1):
+        _std_cell(ws, 6, i, head, size=12 if i <= 2 else 11, bold=True, wrap=True, fill=FILL_BODY)
+    ws.row_dimensions[6].height = 27.0
+
+    # 数据行（至少 14 行，R7 起）
+    data_start = 7
+    need = max(len(group.rows), 14)
+    for i in range(need):
         r = data_start + i
-        new_ws.cell(row=r, column=1, value=sr.color)
-        new_ws.cell(row=r, column=2, value=sr.rolls)
-        new_ws.cell(row=r, column=3, value=sr.supplier)
-        new_ws.cell(row=r, column=4, value=unit.config_account_code)
-        # 复制 R6 的样式（边框/字体/对齐/填充）到 R(i)，确保与 R6 一致
-        for c in range(1, 5):
-            src_c = new_ws.cell(row=data_start, column=c)
-            dst_c = new_ws.cell(row=r, column=c)
-            if src_c.has_style:
-                dst_c.font = copy(src_c.font)
-                dst_c.alignment = copy(src_c.alignment)
-                dst_c.fill = copy(src_c.fill)
-                dst_c.border = copy(src_c.border)
-        new_ws.row_dimensions[r].height = new_ws.row_dimensions[data_start].height
-    # 合计行
-    total_row = data_start + need
-    new_ws.cell(row=total_row, column=1, value="合计")
-    new_ws.cell(row=total_row, column=2, value=group.total_rolls)
-    # 申请人行（若插行后申请人行被下移，重定位）
-    new_ws.cell(row=total_row + 1, column=1, value="申请人")
-    new_ws.cell(row=total_row + 1, column=2, value=unit.config_applicant)
-    new_ws.cell(row=total_row + 1, column=3, value="申请日期")
-    _write_date_cell(new_ws, total_row + 1, 4, unit.date_str)   # 申请日期，显示 YYYY/M/D
-    # 合计行 / 申请人行 应用与数据行一致的样式（字体/对齐/边框/行高）
-    for rr in (total_row, total_row + 1):
-        for c in range(1, 5):
-            src_c = new_ws.cell(row=data_start, column=c)
-            dst_c = new_ws.cell(row=rr, column=c)
-            if src_c.has_style:
-                dst_c.font = copy(src_c.font)
-                dst_c.alignment = copy(src_c.alignment)
-                dst_c.fill = copy(src_c.fill)
-                dst_c.border = copy(src_c.border)
-        new_ws.row_dimensions[rr].height = new_ws.row_dimensions[data_start].height
-    return new_ws
+        ws.row_dimensions[r].height = 21.0 if i >= 3 else 27.0
+        sr = group.rows[i] if i < len(group.rows) else None
+        _std_cell(ws, r, 1, sr.color if sr else None, bold=True, fill=FILL_BODY)
+        _std_cell(ws, r, 2, sr.rolls if sr else None, size=14, bold=True, fill=FILL_BODY)
+        _std_cell(ws, r, 3, sr.supplier if sr else None, fill=FILL_BODY)
+        _std_cell(ws, r, 4, unit.config_account_code if sr else None, fill=FILL_BODY)
+
+    last_data = data_start + need - 1
+    total_row = last_data + 1
+    # 合计行：合计 / =SUM / 办公室 / 办公室地址
+    _std_cell(ws, total_row, 1, "合计", size=12, bold=True, wrap=True, fill=FILL_BODY)
+    _std_cell(ws, total_row, 2, f"=SUM(B{data_start}:B{last_data})", size=12, bold=True,
+              wrap=True, fill=FILL_BODY, color=RED_FONT)
+    _std_cell(ws, total_row, 3, "办公室", size=12, bold=True, wrap=True, fill=FILL_BODY)
+    _std_cell(ws, total_row, 4, unit.config_office, size=12, bold=True, wrap=True, fill=FILL_BODY)
+    ws.row_dimensions[total_row].height = 18.0
+
+    # 申请人行
+    app_row = total_row + 1
+    _std_cell(ws, app_row, 1, "申请人", fill=FILL_BODY)
+    _std_cell(ws, app_row, 2, unit.config_applicant, fill=FILL_BODY)
+    _std_cell(ws, app_row, 3, "申请日期", fill=FILL_BODY)
+    _std_cell(ws, app_row, 4, fill=FILL_BODY)
+    _write_date_cell(ws, app_row, 4, unit.date_str)   # 显示 YYYY/M/D（单数字不补 0）
+    ws.cell(row=app_row, column=4).fill = FILL_BODY
+    ws.row_dimensions[app_row].height = 16.5
+    return ws
+
+
+# ---------- 工厂送货清单 sheet（v32 新增，固定 4 次） ----------
+
+DELIVERY_TIMES = ["一", "二", "三", "四"]
+DELIVERY_FORM_ROWS = 120          # 表单填写区行数（R4:R123）
+
+# 送货清单列配色：工厂要动手填的列各自一个主题色，一眼能分清填哪几列
+# A=袋号(主题2 橙) / F=送货数量(主题3 黄) / G=次品量(主题4 绿)
+# H=良品量(主题5 青) / I=剩余未收货(主题6 红)
+DELIVERY_FILLS = {
+    1: theme_fill(5, 0.8),
+    6: theme_fill(6, 0.8),
+    7: theme_fill(7, 0.8),
+    8: theme_fill(8, 0.8),
+    9: theme_fill(9, 0.8),
+}
+
+
+def _build_delivery_sheet(wb, unit: OrderUnit, times: int, prev_sheet_title: str = ""):
+    """工厂第 N 次送货清单：表头 + 120 行填写区（预填 SKU/色号/尺码/下单数量）"""
+    title = f"工厂第{DELIVERY_TIMES[times - 1]}次送货清单"
+    ws = wb.create_sheet(title=title)
+
+    widths = {"A": 10.625, "B": 20.625, "C": 13.0, "D": 15.625, "E": 10.625,
+              "F": 13.0, "G": 10.625, "H": 13.0, "I": 11.875, "J": 21.125}
+    for col, w in widths.items():
+        ws.column_dimensions[col].width = w
+
+    # R1 标题 + 右侧统计栏（先铺 A1:E1 底色，再写标题文字，避免字号被覆盖）
+    ws.merge_cells("A1:E1")
+    for c in range(1, 6):
+        _std_cell(ws, 1, c)
+    _std_cell(ws, 1, 1, f"{unit.factory_full or unit.factory}第{DELIVERY_TIMES[times-1]}次送货明细",
+              size=12, bold=True)
+    _std_cell(ws, 1, 6, "总送货\n数量", size=12, bold=True, wrap=True)
+    _std_cell(ws, 1, 7, "总次\n品量", size=12, bold=True, wrap=True)
+    _std_cell(ws, 1, 8, "本次\n质检数量", size=12, bold=True, wrap=True)
+    _std_cell(ws, 1, 9, "送货仓库：", size=12, bold=True)
+    _std_cell(ws, 1, 10, unit.config_warehouse or "", size=12, bold=True)
+    ws.row_dimensions[1].height = 40.0
+
+    # R2 订单号 / 款号 / 送货日期（空白待填项用红字，日期格预设 YYYY/M/D）
+    ws.merge_cells("B2:C2")
+    _std_cell(ws, 2, 1, size=12, bold=True, color=RED_FONT)
+    _std_cell(ws, 2, 2, f"订单号：{unit.order_no}", size=12, bold=True)
+    _std_cell(ws, 2, 3)
+    ws.merge_cells("D2:E2")
+    _std_cell(ws, 2, 4, f"款号：{unit.style}", size=12, bold=True)
+    _std_cell(ws, 2, 5)
+    for c in (6, 7):
+        _std_cell(ws, 2, c, size=12, bold=True)
+    _std_cell(ws, 2, 8, size=12, bold=True, fill=FILL_GRAY)   # 本次质检数量（浅灰提示格）
+    _std_cell(ws, 2, 9, "送货日期：", size=12, bold=True)
+    _std_cell(ws, 2, 10, size=12, bold=True, color=RED_FONT)
+    ws.cell(row=2, column=10).number_format = "yyyy/m/d"
+    ws.row_dimensions[2].height = 35.0
+
+    # R3 表头
+    heads = ["袋号", "SKU", "色号 颜色", "尺码", "下单数量", "送货数量", "次品量", "良品量", "剩余未收货", "备注"]
+    for i, h in enumerate(heads, start=1):
+        _std_cell(ws, 3, i, h, size=12, bold=True)
+    ws.row_dimensions[3].height = 35.0
+
+    # R4 起 120 行填写区（各列底色见 DELIVERY_FILLS）
+    data_start = 4
+    total_rows = max(DELIVERY_FORM_ROWS, len(unit.sku_items))
+    for i in range(total_rows):
+        r = data_start + i
+        ws.row_dimensions[r].height = 25.0
+        item = unit.sku_items[i] if i < len(unit.sku_items) else None
+        # 袋号（工厂填，主题橙底 + 红字）
+        _std_cell(ws, r, 1, size=12, bold=True, color=RED_FONT, fill=DELIVERY_FILLS[1])
+        _std_cell(ws, r, 2, item["sku"] if item else None, size=12)
+        _std_cell(ws, r, 3, item["color"] if item else None, size=12)
+        _std_cell(ws, r, 4, item["size"] if item else None, size=12)
+        _std_cell(ws, r, 5, item["qty"] if item else None, size=12)   # 下单数量（系统预填）
+        # 送货数量 / 次品量（工厂填，主题黄/绿底 + 红字）
+        _std_cell(ws, r, 6, size=12, bold=True, color=RED_FONT, fill=DELIVERY_FILLS[6])
+        _std_cell(ws, r, 7, size=12, bold=True, color=RED_FONT, fill=DELIVERY_FILLS[7])
+        # 良品量 = 送货数量 - 次品量（主题青底）
+        _std_cell(ws, r, 8, f'=IF((F{r}-G{r})=0,"",F{r}-G{r})',
+                  size=12, bold=True, fill=DELIVERY_FILLS[8])
+        # 剩余未收货：第1次 = 下单数量-良品量；后续 = 上一次剩余-本次良品量（主题红底）
+        if times == 1:
+            _std_cell(ws, r, 9, f'=IF(N(E{r})=0,"",IF(N(E{r})-N(H{r})>0,N(E{r})-N(H{r}),""))',
+                      size=12, bold=True, fill=DELIVERY_FILLS[9])
+        else:
+            _std_cell(ws, r, 9,
+                      f'=IF(N(E{r})=0,"",IF(N(\'{prev_sheet_title}\'!I{r})-N(H{r})>0,'
+                      f'N(\'{prev_sheet_title}\'!I{r})-N(H{r}),""))',
+                      size=12, bold=True, fill=DELIVERY_FILLS[9])
+        _std_cell(ws, r, 10, size=12)
+
+    ws.freeze_panes = "A4"
+    return ws
+
+
+def _build_delivery_sheets(wb, unit: OrderUnit):
+    """生成 4 张送货清单（第一次~第四次），后续几张级联引用上一张剩余量"""
+    prev = ""
+    for n in range(1, 5):
+        ws = _build_delivery_sheet(wb, unit, n, prev)
+        prev = ws.title
+
 
 
 # ---------- 汇总明细表 ----------
@@ -654,6 +851,7 @@ def generate_all(data: InputData, split_result: SplitResult, out_dir: str) -> Li
         unit.config_applicant = data.config.applicant
         unit.config_account_code = data.config.account_code
         unit.config_office = data.config.office
+        unit.config_warehouse = data.config.warehouse
         unit.date_str = date_str
         unit.images = data.images   # 输入文件「图片」sheet 的图（可能为空 → 用默认）
         # 复制 THD 模板
@@ -665,6 +863,8 @@ def generate_all(data: InputData, split_result: SplitResult, out_dir: str) -> Li
         _build_order_sheet(wb, unit)
         for g in unit.supplier_groups:
             _build_supplier_sheet(wb, unit, g)
+        # v32: 4 张工厂送货清单（第一次~第四次）
+        _build_delivery_sheets(wb, unit)
         path = os.path.join(out_dir, unit.file_name)
         wb.save(path)
         paths.append(path)
