@@ -16,13 +16,13 @@ from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 
 # 双兼容导入：平台集成(包上下文) / 独立运行(脚本目录)
 try:
-    from .core.parser import parse_input
+    from .core.parser import parse_input, match_factory
     from .core.splitter import split
     from .core.generator import generate_all, make_zip
     from .core.lingxing import build_lingxing
     _PKG = True
 except ImportError:
-    from core.parser import parse_input
+    from core.parser import parse_input, match_factory
     from core.splitter import split
     from core.generator import generate_all, make_zip
     from core.lingxing import build_lingxing
@@ -31,6 +31,26 @@ except ImportError:
 _SELF_DIR = os.path.dirname(os.path.abspath(__file__))
 # 下载模板底版：用户提供的真实模板（含主表公式款号/真实示例/图片sheet含DISPIMG默认图）
 INPUT_TEMPLATE_PATH = os.path.join(_SELF_DIR, "templates", "input_template.xlsx")
+
+# 配置表「工厂信息表」预置数据（仅用于模板文件缺失时的兜底生成，与模板内 16 家保持一致）
+FACTORY_SEED = [
+    ("媛媛服饰", "13826924680", "东莞市茶山镇卢屋路146号三楼", "李江伟"),
+    ("嘉品服饰", "17873622720", "虎门镇龙眼二路36号鑫丰缩水厂", "覃生"),
+    ("保入服饰", "18569291582", "广东省东莞市虎门镇，镇兴路22号2楼，A幢", "周水晶"),
+    ("晓松服饰", "13686183553", "虎门威远武山沙工业区一路二号五楼", "李业玲"),
+    ("祺创服饰", "13662784782", "虎门卢联市场东门3号3楼", "唐华"),
+    ("佳彤服饰", "18173936246", "东莞市虎门镇卢屋向西埗头工业区2号佳彤服饰", "小慧"),
+    ("增裕服饰", "13694924318", "东莞市虎门镇龙眼社区龙眼七路 23号增裕制衣有限公司", "吴生"),
+    ("荷帆服饰", "18826835827", "广东省东莞市虎门镇镇口东方三路2号顺成服饰产业园1栋101室", "陈国祥"),
+    ("金服兴服饰", "13712658918", "广东省东莞市虎门镇镇口工业二路1号101室金服兴時装有限公司", "黄树林"),
+    ("润创服饰", "18929149227", "虎门镇，镇口第一工业区A22栋5楼", "余华"),
+    ("臻线服饰", "15338353398", "广东省东莞市虎门镇太宝路75号后座4楼", ""),
+    ("聚进服饰", "13392711582", "东莞市虎门镇龙眼工业路29一楼", ""),
+    ("茗华服饰", "18925559555", "广东东莞虎门镇口博美步行街5号1栋2楼", "林开"),
+    ("速优服饰", "18025168098", "广东省东莞市虎门镇连升北路社岗综合市场利丰楼5楼", "王勇"),
+    ("瑞华服饰", "18680901551", "虎门镇镇口第一工业区镇兴路129号", "许建华"),
+    ("梓洪服饰", "13268525999", "虎门镇龙眼工业路12号B栋四楼梓洪服饰有限公司", "胡生"),
+]
 
 
 def _generate_input_template() -> bytes:
@@ -50,33 +70,33 @@ def _generate_input_template() -> bytes:
     # Sheet1 主表
     ws1 = wb.active
     ws1.title = '主表'
-    ws1.append(['款号', 'SKU编码', 'SKU名称', '颜色', '尺码', '采购数', '工厂', '布行', '品名', '货号', '重量', '备注'])
+    ws1.append(['款号', 'SKU编码', 'SKU名称', '颜色', '尺码', '采购数', '工厂', '布行', '品名', '重量', '备注'])
     for cell in ws1[1]:
         cell.font = hdr_font
         cell.fill = hdr_fill
         cell.alignment = hdr_align
         cell.border = border
-    for c, w in enumerate([10, 20, 25, 18, 8, 10, 10, 15, 12, 14, 10, 16], 1):
+    for c, w in enumerate([10, 20, 25, 18, 8, 10, 10, 15, 12, 10, 16], 1):
         ws1.column_dimensions[get_column_letter(c)].width = w
     
     # 示例行 - 纯色款 PPY0015 长袖上衣（工厂=媛媛，布行=宏裕布行）
-    ws1.append(['PPY0015', 'PPY0015-CS-0102', 'PPY0015-CS 长袖上衣 纯色', '#225 黑色', 'M', 160, '媛媛', '宏裕布行', '牛奶丝', '', '', ''])
-    ws1.append(['PPY0015', 'PPY0015-CS-0103', 'PPY0015-CS 长袖上衣 纯色', '#225 黑色', 'L', 160, '媛媛', '宏裕布行', '牛奶丝', '', '', ''])
-    ws1.append(['PPY0015', 'PPY0015-CS-0104', 'PPY0015-CS 长袖上衣 纯色', '#225 黑色', 'XL', 480, '媛媛', '宏裕布行', '牛奶丝', '', '', ''])
-    ws1.append(['PPY0015', 'PPY0015-CS-0105', 'PPY0015-CS 长袖上衣 纯色', '#225 黑色', '2XL', 480, '媛媛', '宏裕布行', '牛奶丝', '', '', ''])
-    ws1.append(['PPY0015', 'PPY0015-CS-0106', 'PPY0015-CS 长袖上衣 纯色', '#225 黑色', '3XL', 240, '媛媛', '宏裕布行', '牛奶丝', '', '', ''])
+    ws1.append(['PPY0015', 'PPY0015-CS-0102', 'PPY0015-CS 长袖上衣 纯色', '#225 黑色', 'M', 160, '媛媛', '宏裕布行', '牛奶丝', '', ''])
+    ws1.append(['PPY0015', 'PPY0015-CS-0103', 'PPY0015-CS 长袖上衣 纯色', '#225 黑色', 'L', 160, '媛媛', '宏裕布行', '牛奶丝', '', ''])
+    ws1.append(['PPY0015', 'PPY0015-CS-0104', 'PPY0015-CS 长袖上衣 纯色', '#225 黑色', 'XL', 480, '媛媛', '宏裕布行', '牛奶丝', '', ''])
+    ws1.append(['PPY0015', 'PPY0015-CS-0105', 'PPY0015-CS 长袖上衣 纯色', '#225 黑色', '2XL', 480, '媛媛', '宏裕布行', '牛奶丝', '', ''])
+    ws1.append(['PPY0015', 'PPY0015-CS-0106', 'PPY0015-CS 长袖上衣 纯色', '#225 黑色', '3XL', 240, '媛媛', '宏裕布行', '牛奶丝', '', ''])
 
     # 示例行 - 印花款 PPY1042 V领短袖长裙（工厂=聚进，布行=剑邑布行）
-    ws1.append(['PPY1042', 'PPY1042-10-2603', 'PPY1042-YH V领短袖长裙 印花', 'YH1026 漫天三月红', 'L', 10, '聚进', '剑邑布行', '牛奶丝', '', '', ''])
-    ws1.append(['PPY1042', 'PPY1042-10-2604', 'PPY1042-YH V领短袖长裙 印花', 'YH1026 漫天三月红', 'XL', 10, '聚进', '剑邑布行', '牛奶丝', '', '', ''])
-    ws1.append(['PPY1042', 'PPY1042-10-2605', 'PPY1042-YH V领短袖长裙 印花', 'YH1026 漫天三月红', '2XL', 20, '聚进', '剑邑布行', '牛奶丝', '', '', ''])
-    ws1.append(['PPY1042', 'PPY1042-10-2606', 'PPY1042-YH V领短袖长裙 印花', 'YH1026 漫天三月红', '3XL', 30, '聚进', '剑邑布行', '牛奶丝', '', '', ''])
+    ws1.append(['PPY1042', 'PPY1042-10-2603', 'PPY1042-YH V领短袖长裙 印花', 'YH1026 漫天三月红', 'L', 10, '聚进', '剑邑布行', '牛奶丝', '', ''])
+    ws1.append(['PPY1042', 'PPY1042-10-2604', 'PPY1042-YH V领短袖长裙 印花', 'YH1026 漫天三月红', 'XL', 10, '聚进', '剑邑布行', '牛奶丝', '', ''])
+    ws1.append(['PPY1042', 'PPY1042-10-2605', 'PPY1042-YH V领短袖长裙 印花', 'YH1026 漫天三月红', '2XL', 20, '聚进', '剑邑布行', '牛奶丝', '', ''])
+    ws1.append(['PPY1042', 'PPY1042-10-2606', 'PPY1042-YH V领短袖长裙 印花', 'YH1026 漫天三月红', '3XL', 30, '聚进', '剑邑布行', '牛奶丝', '', ''])
 
     # 示例行 - 混搭色款 PPY4005 亨利领睡衣套装（颜色含+号，布行用空格分隔2个布行）
-    ws1.append(['PPY4005', 'PPY4005-HD-0103', 'PPY4005-YH 亨利领睡衣套装 混搭', '#179 海军蓝+YH5126 棕蓝格子', 'L', 10, '嘉品', '宏裕布行 剑邑布行', '牛奶丝', '', '', ''])
-    ws1.append(['PPY4005', 'PPY4005-HD-0104', 'PPY4005-YH 亨利领睡衣套装 混搭', '#179 海军蓝+YH5126 棕蓝格子', 'XL', 10, '嘉品', '宏裕布行 剑邑布行', '牛奶丝', '', '', ''])
-    ws1.append(['PPY4005', 'PPY4005-HD-0105', 'PPY4005-YH 亨利领睡衣套装 混搭', '#179 海军蓝+YH5126 棕蓝格子', '2XL', 20, '嘉品', '宏裕布行 剑邑布行', '牛奶丝', '', '', ''])
-    ws1.append(['PPY4005', 'PPY4005-HD-0106', 'PPY4005-YH 亨利领睡衣套装 混搭', '#179 海军蓝+YH5126 棕蓝格子', '3XL', 20, '嘉品', '宏裕布行 剑邑布行', '牛奶丝', '', '', ''])
+    ws1.append(['PPY4005', 'PPY4005-HD-0103', 'PPY4005-YH 亨利领睡衣套装 混搭', '#179 海军蓝+YH5126 棕蓝格子', 'L', 10, '嘉品', '宏裕布行 剑邑布行', '牛奶丝', '', ''])
+    ws1.append(['PPY4005', 'PPY4005-HD-0104', 'PPY4005-YH 亨利领睡衣套装 混搭', '#179 海军蓝+YH5126 棕蓝格子', 'XL', 10, '嘉品', '宏裕布行 剑邑布行', '牛奶丝', '', ''])
+    ws1.append(['PPY4005', 'PPY4005-HD-0105', 'PPY4005-YH 亨利领睡衣套装 混搭', '#179 海军蓝+YH5126 棕蓝格子', '2XL', 20, '嘉品', '宏裕布行 剑邑布行', '牛奶丝', '', ''])
+    ws1.append(['PPY4005', 'PPY4005-HD-0106', 'PPY4005-YH 亨利领睡衣套装 混搭', '#179 海军蓝+YH5126 棕蓝格子', '3XL', 20, '嘉品', '宏裕布行 剑邑布行', '牛奶丝', '', ''])
 
     # Sheet2 面料表
     ws2 = wb.create_sheet('面料表')
@@ -109,6 +129,20 @@ def _generate_input_template() -> bytes:
     ws3.append(['申请人', '肖体桥'])
     ws3.append(['联系地址', '东莞启创-朗晨'])
     ws3.append(['采购仓库', '启创-福茂仓库'])
+
+    # 配置表 - 工厂信息表（空一行后：工厂名称/联系方式/工厂地址/联系人）
+    ws3.append([])
+    ws3.append(['工厂名称', '联系方式', '工厂地址', '联系人'])
+    _hdr_row = ws3.max_row
+    for cell in ws3[_hdr_row]:
+        cell.font = hdr_font
+        cell.fill = hdr_fill
+        cell.alignment = hdr_align
+        cell.border = border
+    ws3.column_dimensions['C'].width = 30
+    ws3.column_dimensions['D'].width = 14
+    for _f in FACTORY_SEED:
+        ws3.append(list(_f))
 
     buf = io.BytesIO()
     wb.save(buf)
@@ -170,6 +204,24 @@ def render_purchase_order_page():
         c2.metric("账号代码", data.config.account_code)
         c3.metric("申请人", data.config.applicant)
         c4.metric("联系地址", data.config.office)
+
+        # 工厂信息匹配检查（配置表「工厂信息表」）
+        if data.config.factories:
+            _unknown = []
+            for _f in sorted({r.factory for r in data.rows if r.factory}):
+                _fi = match_factory(data.config, _f)
+                if not _fi.contact and not _fi.address and not _fi.phone:
+                    _unknown.append(_f)
+            if _unknown:
+                st.warning(
+                    "⚠️ 以下工厂在「配置表-工厂信息表」中没有匹配到（布料申购单的联系人/电话/地址会留空）："
+                    + "、".join(_unknown)
+                )
+            else:
+                st.caption(f"🏭 工厂信息已匹配 {len(data.config.factories)} 家")
+        else:
+            st.warning("⚠️ 未读取到「配置表-工厂信息表」（A7 起：工厂名称/联系方式/工厂地址/联系人），"
+                       "布料申购单的联系人/电话/地址将留空")
 
     # ---------------- 步骤 3: 预览 ----------------
     st.subheader("3️⃣ 拆单预览")
@@ -350,13 +402,17 @@ def render_purchase_order_page():
     # ---------------- 侧边栏说明 ----------------
     with st.sidebar:
         st.markdown("### 📋 输入格式说明")
-        st.markdown("**Sheet1 主表**：款号 / SKU编码 / SKU名称 / 颜色 / 尺码 / 采购数 / 工厂 / 布行 / 品名 / 货号(选填) / 重量(选填) / 备注")
+        st.markdown("**Sheet1 主表**：款号 / SKU编码 / SKU名称 / 颜色 / 尺码 / 采购数 / 工厂 / 布行 / **品名(写入申购单)** / 重量(选填) / 备注")
         st.markdown("**Sheet2 面料表**：款号 / 产品名称 / 品名 / 纸样名称 / 洗水唛成分 / 每条布出货数(件) / 是否需要压缩袋 / 包装袋规格")
-        st.markdown("**Sheet3 配置表**：品牌 / 账号代码 / 申请人 / 联系地址 / 采购仓库（下拉）")
+        st.markdown("**Sheet3 配置表**：品牌 / 账号代码 / 申请人 / 联系地址 / 采购仓库（下拉）"
+                    " + **工厂信息表**（A7 起：工厂名称 / 联系方式 / 工厂地址 / 联系人）")
         st.divider()
         st.markdown("### ⚙️ 规则要点")
         st.markdown("- 拆单：按 **款号×工厂** 一份文件；订单号 = PPY+日期+序号")
         st.markdown("- 布料条数 = 件数 ÷ 每条布出货数（向上取整）")
         st.markdown("- 混搭色：布行填 2 个（逗号/空格/分号均可），拆分默认对半可改")
         st.markdown("- 同款同色 SKU 的工厂/布行必须一致（防复制错误）")
+        st.markdown("- **工厂简称自动匹配工厂信息表全称**（如 嘉品 → 嘉品服饰），匹配到才填联系信息")
+        st.markdown("- 输出：订单页 + 每布行一张布料申购单 + **4 张工厂送货清单**（预填 SKU/尺码/下单数量）")
+        st.markdown("- 订单页右侧含 **裁床数量(工厂填写)** 区块（S~6XL 共 9 个尺码 + 汇总）")
         st.markdown("- 输出含 领星批量导入采购单（供应商自动加\"工厂\"后缀）")
