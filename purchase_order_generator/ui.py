@@ -17,13 +17,13 @@ from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 # 双兼容导入：平台集成(包上下文) / 独立运行(脚本目录)
 try:
     from .core.parser import parse_input, match_factory
-    from .core.splitter import split
+    from .core.splitter import split, check_pcs_multiple
     from .core.generator import generate_all, make_zip
     from .core.lingxing import build_lingxing
     _PKG = True
 except ImportError:
     from core.parser import parse_input, match_factory
-    from core.splitter import split
+    from core.splitter import split, check_pcs_multiple
     from core.generator import generate_all, make_zip
     from core.lingxing import build_lingxing
     _PKG = False
@@ -256,6 +256,19 @@ def render_purchase_order_page():
     # 执行拆单
     res = split(data, st.session_state.edited_qty1 or None)
 
+    # ⚠️ 计划下单数必须是「每条布出货数」的整数倍（否则要买半条布 → 浪费）
+    _pcs_bad = check_pcs_multiple(res, data)
+    if _pcs_bad:
+        st.warning(
+            f"⚠️ **有 {len(_pcs_bad)} 个颜色的「计划下单数」不是「每条布出货数」的整数倍**，"
+            f"会产生半条布（多买的部分用不上）。\n\n"
+            f"请在输入文件把采购数调整为下表「向上对齐」或「向下对齐」的件数后重新上传；"
+            f"混搭色的前半段件数可直接在上方「混搭色拆分」表里改，改完此表会实时刷新。"
+        )
+        st.dataframe(pd.DataFrame(_pcs_bad), use_container_width=True, hide_index=True)
+    else:
+        st.caption("✅ 计划下单数全部为「每条布出货数」的整数倍")
+
     # 🖼️ 可选: 在网页直接上传图片替换订单里的图 (不传则用默认图)
     st.markdown("---")
     st.markdown("#### 🖼️ 替换订单图片（可选，不传用默认）")
@@ -409,8 +422,11 @@ def render_purchase_order_page():
         st.divider()
         st.markdown("### ⚙️ 规则要点")
         st.markdown("- 拆单：按 **款号×工厂** 一份文件；订单号 = PPY+日期+序号")
-        st.markdown("- 布料条数 = 件数 ÷ 每条布出货数（向上取整）")
-        st.markdown("- 混搭色：布行填 2 个（逗号/空格/分号均可），拆分默认对半可改")
+        st.markdown("- 布料条数 = 件数 ÷ 每条布出货数（向上取整；订单页按颜色行独立算）")
+        st.markdown("- **计划下单数必须是「每条布出货数」的整数倍**；不是的话网页「3️⃣ 拆单预览」会列出颜色，"
+                    "并给出向上/向下对齐后的件数供你修改")
+        st.markdown("- 混搭色：布行必须填 **2 个**（逗号/空格/分号均可），拆分默认对半可改；"
+                    "订单页条数**至少 2 条**（前后两个颜色各 1 条），申购单按两段分别算条数")
         st.markdown("- 同款同色 SKU 的工厂/布行必须一致（防复制错误）")
         st.markdown("- **工厂简称自动匹配工厂信息表全称**（如 嘉品 → 嘉品服饰），匹配到才填联系信息")
         st.markdown("- 输出：订单页 + 每布行一张布料申购单 + **4 张工厂送货清单**（预填 SKU/尺码/下单数量）")
