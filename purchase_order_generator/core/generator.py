@@ -696,6 +696,7 @@ def _build_supplier_sheet(wb, unit: OrderUnit, group):
     _write_date_cell(ws, app_row, 4, unit.date_str)   # 显示 YYYY/M/D（单数字不补 0）
     ws.cell(row=app_row, column=4).fill = FILL_BODY
     ws.row_dimensions[app_row].height = 16.5
+    # 注：布料申购单不需要打印，故不做打印设置（按用户要求保持原样）
     return ws
 
 
@@ -703,6 +704,16 @@ def _build_supplier_sheet(wb, unit: OrderUnit, group):
 
 DELIVERY_TIMES = ["一", "二", "三", "四"]
 DELIVERY_FORM_ROWS = 120          # 表单填写区行数（R4:R123）
+DELIVERY_PRINT_MIN_ROWS = 16      # 打印区域最少数据行数（数据少时留白供工厂手写，同时保证 1 页打得下）
+
+# 字号（v37）：对齐工厂现用单据（AYA 版模板）—— 表头 12 粗、数据 11。
+# 打印观感主要靠「A4 纵向 + 自动缩放约 78%」得到，数据 11 号折到纸面约 8.6pt，
+# 与现用单据（12 号 × 69% ≈ 8.3pt）基本一致；同时 C 列（色号 颜色）在 11 号下
+# 「#179 海军蓝+YH5126 棕蓝格子」实占 210px，列宽 32（223px）装得下，不再顶框。
+DELIVERY_HEAD_SIZE = 12
+DELIVERY_BODY_SIZE = 11
+DELIVERY_HEAD_ROW_H = 35.0
+DELIVERY_BODY_ROW_H = 25.0
 
 # 送货清单列配色：工厂要动手填的列各自一个主题色，一眼能分清填哪几列
 # A=袋号(主题2 橙) / F=送货数量(主题3 黄) / G=次品量(主题4 绿)
@@ -716,13 +727,56 @@ DELIVERY_FILLS = {
 }
 
 
+def _apply_print_setup(ws, last_row: int, last_col: str, *, landscape: bool,
+                       title_rows: str = "", footer_left: str = "", margin: float = 0.2):
+    """统一打印设置：保证「宽度压缩到 1 页」，不会出现右侧列被切到下一页。
+
+    - fitToPage 打开 + fitToWidth=1 / fitToHeight=0：宽度永远只占 1 页，高度按内容自然分页
+    - landscape：v37 起送货单恢复 A4 **纵向**（对齐工厂现用单据的观感：纵向 + 自动缩放约 80%，
+      一页宽、文字小巧；v36 的横向 100% 反而把 12 号字放大 45%，显得笨重且顶框）
+    - title_rows：跨页时每页重复的表头行（如 "1:3"）
+    - print_area：只打印到真实末行，避免 120 行空白区打出好几页白纸
+    - 页脚：左边写订单号/款号（散页也能认出来），右边写「第 X 页 / 共 Y 页」
+    """
+    from openpyxl.worksheet.properties import PageSetupProperties
+
+    ws.sheet_properties.pageSetUpPr = PageSetupProperties(fitToPage=True)
+    ws.page_setup.orientation = "landscape" if landscape else "portrait"
+    ws.page_setup.paperSize = ws.PAPERSIZE_A4
+    ws.page_setup.fitToWidth = 1          # 宽度压到 1 页（关键：不再切列）
+    ws.page_setup.fitToHeight = 0         # 高度不限，按行数自然分页
+    ws.print_options.horizontalCentered = True
+
+    if title_rows:
+        ws.print_title_rows = title_rows
+
+    ws.print_area = f"A1:{last_col}{last_row}"
+
+    # 边距收到最窄（工厂现用单据是 0 边距，这里留 0.2 英寸避开打印机物理不可打印区）
+    m = ws.page_margins
+    m.left = m.right = margin
+    m.top = 0.3
+    m.bottom = 0.4      # 给页脚留位置
+    m.header = m.footer = 0.15
+
+    if footer_left:
+        ws.oddFooter.left.text = footer_left
+        ws.oddFooter.left.size = 9
+    ws.oddFooter.right.text = "第 &P 页 / 共 &N 页"
+    ws.oddFooter.right.size = 9
+
+
 def _build_delivery_sheet(wb, unit: OrderUnit, times: int, prev_sheet_title: str = ""):
     """工厂第 N 次送货清单：表头 + 120 行填写区（预填 SKU/色号/尺码/下单数量）"""
     title = f"工厂第{DELIVERY_TIMES[times - 1]}次送货清单"
     ws = wb.create_sheet(title=title)
 
-    widths = {"A": 10.625, "B": 20.625, "C": 13.0, "D": 15.625, "E": 10.625,
-              "F": 13.0, "G": 10.625, "H": 13.0, "I": 11.875, "J": 21.125}
+    # 列宽：以工厂现用单据（AYA 版）为基准重分配，总宽 137.7 单位 ≈ 25.6cm。
+    # 现用单据原值 A10.6/B20.6/C20.6/D15.6/E10.6/F10.6/G10.6/H10.6/I11.9/J21.1（合计 143）；
+    # 差异只在两处：C（色号 颜色）20.6→32 装得下最长 27 字色名，D（尺码）15.6→8 只放 L/2XL 太浪费，
+    # J（备注）21.1→13.5。A4 纵向可打印宽约 20cm，自动缩放 ≈78%。
+    widths = {"A": 9.0, "B": 20.5, "C": 32.0, "D": 8.0, "E": 10.6,
+              "F": 11.0, "G": 10.6, "H": 10.6, "I": 11.9, "J": 13.5}
     for col, w in widths.items():
         ws.column_dimensions[col].width = w
 
@@ -758,40 +812,49 @@ def _build_delivery_sheet(wb, unit: OrderUnit, times: int, prev_sheet_title: str
     # R3 表头
     heads = ["袋号", "SKU", "色号 颜色", "尺码", "下单数量", "送货数量", "次品量", "良品量", "剩余未收货", "备注"]
     for i, h in enumerate(heads, start=1):
-        _std_cell(ws, 3, i, h, size=12, bold=True)
-    ws.row_dimensions[3].height = 35.0
+        _std_cell(ws, 3, i, h, size=DELIVERY_HEAD_SIZE, bold=True)
+    ws.row_dimensions[3].height = DELIVERY_HEAD_ROW_H
 
     # R4 起 120 行填写区（各列底色见 DELIVERY_FILLS）
     data_start = 4
     total_rows = max(DELIVERY_FORM_ROWS, len(unit.sku_items))
     for i in range(total_rows):
         r = data_start + i
-        ws.row_dimensions[r].height = 25.0
+        ws.row_dimensions[r].height = DELIVERY_BODY_ROW_H
         item = unit.sku_items[i] if i < len(unit.sku_items) else None
         # 袋号（工厂填，主题橙底 + 红字）
-        _std_cell(ws, r, 1, size=12, bold=True, color=RED_FONT, fill=DELIVERY_FILLS[1])
-        _std_cell(ws, r, 2, item["sku"] if item else None, size=12)
-        _std_cell(ws, r, 3, item["color"] if item else None, size=12)
-        _std_cell(ws, r, 4, item["size"] if item else None, size=12)
-        _std_cell(ws, r, 5, item["qty"] if item else None, size=12)   # 下单数量（系统预填）
+        _std_cell(ws, r, 1, size=DELIVERY_BODY_SIZE, bold=True, color=RED_FONT, fill=DELIVERY_FILLS[1])
+        _std_cell(ws, r, 2, item["sku"] if item else None, size=DELIVERY_BODY_SIZE)
+        _std_cell(ws, r, 3, item["color"] if item else None, size=DELIVERY_BODY_SIZE)
+        _std_cell(ws, r, 4, item["size"] if item else None, size=DELIVERY_BODY_SIZE)
+        _std_cell(ws, r, 5, item["qty"] if item else None, size=DELIVERY_BODY_SIZE)   # 下单数量（系统预填）
         # 送货数量 / 次品量（工厂填，主题黄/绿底 + 红字）
-        _std_cell(ws, r, 6, size=12, bold=True, color=RED_FONT, fill=DELIVERY_FILLS[6])
-        _std_cell(ws, r, 7, size=12, bold=True, color=RED_FONT, fill=DELIVERY_FILLS[7])
+        _std_cell(ws, r, 6, size=DELIVERY_BODY_SIZE, bold=True, color=RED_FONT, fill=DELIVERY_FILLS[6])
+        _std_cell(ws, r, 7, size=DELIVERY_BODY_SIZE, bold=True, color=RED_FONT, fill=DELIVERY_FILLS[7])
         # 良品量 = 送货数量 - 次品量（主题青底）
         _std_cell(ws, r, 8, f'=IF((F{r}-G{r})=0,"",F{r}-G{r})',
-                  size=12, bold=True, fill=DELIVERY_FILLS[8])
+                  size=DELIVERY_BODY_SIZE, bold=True, fill=DELIVERY_FILLS[8])
         # 剩余未收货：第1次 = 下单数量-良品量；后续 = 上一次剩余-本次良品量（主题红底）
         if times == 1:
             _std_cell(ws, r, 9, f'=IF(N(E{r})=0,"",IF(N(E{r})-N(H{r})>0,N(E{r})-N(H{r}),""))',
-                      size=12, bold=True, fill=DELIVERY_FILLS[9])
+                      size=DELIVERY_BODY_SIZE, bold=True, fill=DELIVERY_FILLS[9])
         else:
             _std_cell(ws, r, 9,
                       f'=IF(N(E{r})=0,"",IF(N(\'{prev_sheet_title}\'!I{r})-N(H{r})>0,'
                       f'N(\'{prev_sheet_title}\'!I{r})-N(H{r}),""))',
-                      size=12, bold=True, fill=DELIVERY_FILLS[9])
-        _std_cell(ws, r, 10, size=12)
+                      size=DELIVERY_BODY_SIZE, bold=True, fill=DELIVERY_FILLS[9])
+        _std_cell(ws, r, 10, size=DELIVERY_BODY_SIZE)
 
     ws.freeze_panes = "A4"
+
+    # 打印设置：A4 纵向 + 宽度压 1 页（自动缩放约 80%，与工厂现用单据观感一致）
+    # 数据行数不足 DELIVERY_PRINT_MIN_ROWS 时按该值留白（工厂手写空间），避免 120 行空白区打出多页白纸
+    body_rows = max(len(unit.sku_items), DELIVERY_PRINT_MIN_ROWS)
+    _apply_print_setup(
+        ws, last_row=3 + body_rows, last_col="J", landscape=False,
+        title_rows="1:3",
+        footer_left=f"订单号：{unit.order_no}   款号：{unit.style}   第{DELIVERY_TIMES[times-1]}次送货",
+    )
     return ws
 
 
