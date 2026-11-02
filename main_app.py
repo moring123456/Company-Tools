@@ -11,13 +11,17 @@ from visualizer import create_keyword_trend_fig, prepare_color_sales_data, creat
 # --- 新增模块：采购单自动化生成（v1.5）---
 from purchase_order_generator.ui import render_purchase_order_page
 
+# --- 新增模块：成本计算（新）--- 新输入口径（装箱明细 + 款号档案出货数），与上面两个旧模块完全独立
+from cost_new import run_cost_calculation, export_excel
+
 st.set_page_config(page_title="公司数据处理平台", layout="wide")
 st.title("📊 自动化计算工具平台")
 
 st.sidebar.title("工具菜单")
 menu_choice = st.sidebar.radio(
     "请选择你需要使用的功能：",
-    ["🧵 布料费用计算", "🚚 运费计算", "📦 退货数据分析", "📊 数据可视化", "✂️ 排料计算 (开发中)", "📋 采购单自动化生成"]
+    ["🧵 布料费用计算", "🚚 运费计算", "🧮 成本计算（新）",
+     "📦 退货数据分析", "📊 数据可视化", "✂️ 排料计算 (开发中)", "📋 采购单自动化生成"]
 )
 
 if menu_choice == "🧵 布料费用计算":
@@ -72,6 +76,88 @@ elif menu_choice == "🚚 运费计算":
                         )
                 except Exception as e:
                     st.error(f"❌ 错误：{str(e)}")
+
+
+elif menu_choice == "🧮 成本计算（新）":
+    st.header("成本计算（新）")
+    st.caption(
+        "**新口径**：一个 Excel 一次算出布料费 + 运费。与「布料费用计算」「运费计算」两个旧模块互不影响——"
+        "旧模块走订单表 / 发货日报表，本模块走装箱明细，成衣数直接读款号档案。"
+    )
+
+    with st.expander("📋 需要的 4 张工作表", expanded=False):
+        st.markdown(
+            """
+| 工作表 | 必需列 | 说明 |
+|---|---|---|
+| **布料跟踪表** | 下单日期 / 订单编号 / 产品名称 / 颜色&色号 / 布料送货数量（匹） / 金额（元） | 匹数或金额为空的「未送货」行自动剔除 |
+| **款号档案** | 款号 / **出货数（件/匹）** | 这一列就是成衣数 Q；**留空 = 该款已淘汰，不参与计算** |
+| **FBA头程** | 发货日期 / 货件编号 / 发货数量pcs / 总金额 | 头程费用来源 |
+| **数据源-领星-FBA货件-装箱明细** | 货件单号 / MSKU / 申报量 | 按各 SKU 申报量占比分摊运费 |
+            """
+        )
+        st.info("时间窗口统一取近一年（365 天）：布料按最新下单日、运费按最新发货日各自倒推。"
+                "装箱明细的货件单号是合并单元格，程序会自动向下填充。")
+
+    uploaded_file = st.file_uploader(
+        "点击此处上传 Excel（一个文件即可）",
+        type=["xlsx", "xls"],
+        key="cost_new_uploader"
+    )
+
+    if uploaded_file is not None:
+        if st.button("🚀 开始计算", key="cost_new_run"):
+            with st.spinner("正在计算布料与运费..."):
+                try:
+                    uploaded_file.seek(0)
+                    result = run_cost_calculation(uploaded_file)
+                    summary = result.get("摘要", {})
+                    df_main = result["成本汇总"]
+
+                    if df_main.empty:
+                        st.warning(
+                            "没有算出任何款。请检查：①「款号档案 - 出货数（件/匹）」是否已填写；"
+                            "②「布料跟踪表」在近一年内是否有已送货的匹数与金额。")
+                    else:
+                        st.success(
+                            f"🎉 完成！{summary.get('完整成本款数', 0)} 个款拿到完整成本"
+                            f"（布料 {summary.get('布料款数', 0)} 个 · 运费 {summary.get('运费款数', 0)} 个）")
+
+                        c1, c2, c3, c4 = st.columns(4)
+                        c1.metric("单件总成本",
+                                  f"¥{summary.get('合计最低', 0):.2f} ~ {summary.get('合计最高', 0):.2f}")
+                        c2.metric("运费金额覆盖率", str(summary.get("运费覆盖率", "-")))
+                        c3.metric("发货件数合计", f"{summary.get('发货件数合计', 0):,}")
+                        c4.metric("未进主表的款", summary.get("排除款数", 0))
+
+                        st.markdown("### 💰 成本汇总")
+                        st.dataframe(df_main, use_container_width=True)
+
+                        df_only = result.get("仅有运费的款")
+                        if df_only is not None and not df_only.empty:
+                            with st.expander(f"ℹ️ 另有 {len(df_only)} 个款只有运费、没有布料成本"):
+                                st.caption("这些款有发货记录，但近一年没有布料送货、或已被淘汰。")
+                                st.dataframe(df_only, use_container_width=True)
+
+                        df_ex = result.get("排除款清单")
+                        if df_ex is not None and not df_ex.empty:
+                            with st.expander(f"ℹ️ 已排除 {len(df_ex)} 个款（不参与计算）"):
+                                st.dataframe(df_ex, use_container_width=True)
+
+                        buf = io.BytesIO()
+                        export_excel(result, buf)
+                        buf.seek(0)
+                        st.download_button(
+                            "📥 下载完整结果（8 个 sheet）",
+                            data=buf,
+                            file_name="成本计算结果.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            key="cost_new_download"
+                        )
+                except Exception as e:
+                    st.error(f"❌ 错误：{str(e)}")
+                    with st.expander("查看详细错误"):
+                        st.exception(e)
 
 elif menu_choice == "📦 退货数据分析":
     st.header("退货数据自动化分析")
