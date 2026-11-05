@@ -7,11 +7,12 @@
 订单号 = PPY + 输入文件名日期 + 序号(按组合首次出现顺序)
 """
 import re
+from collections import Counter
 from dataclasses import dataclass, field
 from typing import Dict, List, Tuple
 from datetime import date
 
-from .calc import (SIZE_ORDER, classify_type, gcd_ratio, half_split,
+from .calc import (SIZE_ORDER, classify_type, color_key, gcd_ratio, half_split,
                    is_mixed_color, rolls, sort_sizes, split_mixed_color,
                    split_suppliers)
 from .parser import InputData, SKURow, match_factory
@@ -83,6 +84,8 @@ class OrderUnit:
 class SplitResult:
     units: List[OrderUnit] = field(default_factory=list)
     mixed_splits: List[Dict] = field(default_factory=list)   # 混搭拆分明细(预览用)
+    # 颜色写法自动合并明细(预览用)：同一颜色在输入表里有多种写法时会被并成一个
+    color_merges: List[Dict] = field(default_factory=list)
 
 
 # ---------- 工具 ----------
@@ -110,6 +113,41 @@ def _supplier_parts(sr: SKURow) -> Tuple[str, str]:
         if len(parts) >= 2:
             return parts[0], parts[1]
     return sr.supplier, ""
+
+
+def _color_counter(skus: List[SKURow]) -> Dict[str, Counter]:
+    """统计每个「颜色去重键」下出现过的所有写法及次数（混搭色按前后两段分别统计）"""
+    cnt: Dict[str, Counter] = {}
+    for sr in skus:
+        parts = split_mixed_color(sr.color) if is_mixed_color(sr.color) else (sr.color, "")
+        for p in parts:
+            p = (p or "").strip()
+            if p:
+                cnt.setdefault(color_key(p), Counter())[p] += 1
+    return cnt
+
+
+def _color_display_names(skus: List[SKURow]) -> Dict[str, str]:
+    """同一颜色的多种写法 → 统一成一个显示名（取出现次数最多的那种写法）。
+
+    输入表里实际会遇到：
+        '#3 黑色'            与 '3#黑色'            （混搭色前段常写成 3#黑色）
+        'YH3131 灰蓝海棠花'  与 'YH3131灰蓝海棠花'    （少一个空格）
+        'YH5045 黑底雕花白'  与 'YH5045 黑底-雕花白'  （多一个连字符）
+    这些是同一个颜色。不统一的话，布行申购单里会出现两行"同名色"，
+    看起来像件数重复计算了。
+    """
+    return {k: c.most_common(1)[0][0] for k, c in _color_counter(skus).items()}
+
+
+def _disp_color(color: str, alias: Dict[str, str]) -> str:
+    """取颜色的统一显示名；混搭色把前后两段各自统一后重新拼接"""
+    if is_mixed_color(color):
+        p1, p2 = split_mixed_color(color)
+        a1 = alias.get(color_key(p1), p1)
+        a2 = alias.get(color_key(p2), p2)
+        return f"{a1}+{a2}" if a2 else a1
+    return alias.get(color_key(color), color)
 
 
 # ---------- 拆单 ----------
@@ -161,12 +199,22 @@ def split(data: InputData, mixed_overrides: Dict[str, int] = None) -> SplitResul
         )
         color_qty: Dict[str, Dict[str, int]] = {}
         color_remark: Dict[str, set] = {}
+        alias = _color_display_names(skus)      # 同一颜色的不同写法 → 统一显示名
+        # 记录哪些颜色发生了"多写法合并"（预览时提示用户，避免误以为件数被改了）
+        for _k, _c in _color_counter(skus).items():
+            if len(_c) > 1:
+                result.color_merges.append({
+                    "order_no": unit.order_no, "style": style, "factory": factory,
+                    "display": alias.get(_k, _c.most_common(1)[0][0]),
+                    "variants": "；".join(f"{n}×{v}" for n, v in _c.most_common()),
+                })
         for sr in skus:
-            color_qty.setdefault(sr.color, {})
+            disp = _disp_color(sr.color, alias)
+            color_qty.setdefault(disp, {})
             if sr.size:
-                color_qty[sr.color][sr.size] = color_qty[sr.color].get(sr.size, 0) + max(sr.qty, 0)
+                color_qty[disp][sr.size] = color_qty[disp].get(sr.size, 0) + max(sr.qty, 0)
             if sr.remark:
-                color_remark.setdefault(sr.color, set()).add(sr.remark)
+                color_remark.setdefault(disp, set()).add(sr.remark)
 
         # 4. 申购条目（按 SKU 行拆，混搭拆两半）
         #    entry = (supplier, color, qty, original_color)
@@ -194,6 +242,8 @@ def split(data: InputData, mixed_overrides: Dict[str, int] = None) -> SplitResul
                     q1 = int(q1)
                     q2 = q - q1
                 p1, p2 = split_mixed_color(sr.color)
+                p1 = alias.get(color_key(p1), p1)      # 统一写法（3#黑色 → #3 黑色）
+                p2 = alias.get(color_key(p2), p2)
                 entries.append((s1, p1, q1, sr.color))
                 _collect_meta(s1, sr)
                 if q2:
@@ -209,7 +259,7 @@ def split(data: InputData, mixed_overrides: Dict[str, int] = None) -> SplitResul
                     "supplier1": s1, "supplier2": s2,
                 })
             else:
-                entries.append((sr.supplier, sr.color, q, sr.color))
+                entries.append((sr.supplier, _disp_color(sr.color, alias), q, sr.color))
                 _collect_meta(sr.supplier, sr)
 
         # 5. 布行聚合
@@ -271,9 +321,10 @@ def split(data: InputData, mixed_overrides: Dict[str, int] = None) -> SplitResul
         # v32: SKU 明细（工厂送货清单预填：颜色按订单行顺序、尺码按 S~6XL 顺序）
         size_idx = {s: i for i, s in enumerate(SIZE_ORDER)}
         color_idx = {cr.color: i for i, cr in enumerate(unit.color_rows)}
-        ordered = sorted(skus, key=lambda s: (color_idx.get(s.color, 999), size_idx.get(s.size, 99)))
+        ordered = sorted(skus, key=lambda s: (color_idx.get(_disp_color(s.color, alias), 999),
+                                              size_idx.get(s.size, 99)))
         unit.sku_items = [
-            {"sku": s.sku, "color": s.color, "size": s.size, "qty": max(s.qty, 0)}
+            {"sku": s.sku, "color": _disp_color(s.color, alias), "size": s.size, "qty": max(s.qty, 0)}
             for s in ordered if max(s.qty, 0) > 0
         ]
         unit.total_qty = sum(cr.total for cr in unit.color_rows)
