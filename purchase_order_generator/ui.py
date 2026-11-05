@@ -368,6 +368,15 @@ def render_purchase_order_page():
     st.dataframe(pd.DataFrame(preview_rows), use_container_width=True, hide_index=True)
 
     with st.expander("🔍 查看各文件明细（订单颜色行 + 申购单）"):
+        if getattr(res, "color_merges", None):
+            st.warning(
+                "检测到同一颜色有多种写法，已自动合并成一个（件数不变，只是不再拆成两行）：\n\n"
+                + "\n".join(
+                    f"- **{m['display']}**  ←  " + m["variants"]
+                    for m in res.color_merges
+                )
+                + "\n\n建议统一输入表里的颜色写法，避免以后对不上。"
+            )
         for u in res.units:
             st.markdown(f"**{u.order_no} | {u.style} | {u.factory} | {u.file_name}**")
             c_left, c_right = st.columns(2)
