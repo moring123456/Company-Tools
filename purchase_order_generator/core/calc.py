@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """calc.py — 计算模块：比例/条数/尺码/类型/混搭色工具函数"""
 import re
+import unicodedata
 from math import gcd
 from functools import reduce
 from typing import Dict, List, Tuple
@@ -54,6 +55,24 @@ def split_mixed_color(color: str) -> Tuple[str, str]:
     """混搭色按第一个 + 拆成 (前段, 后段)"""
     parts = str(color).split("+", 1)
     return parts[0].strip(), parts[1].strip() if len(parts) > 1 else ""
+
+
+# 颜色写法噪声：空白、各类连字符/间隔号，以及 # 的位置差异
+# 同一个颜色在输入表里常有多种写法，例如
+#     '#3 黑色'            vs '3#黑色'              (混搭色前段常写成 3#黑色)
+#     'YH3131 灰蓝海棠花'  vs 'YH3131灰蓝海棠花'      (少一个空格)
+#     'YH5045 黑底雕花白'  vs 'YH5045 黑底-雕花白'    (多一个连字符)
+# 不归一化会导致布行申购单里同一颜色拆成两行（件数看着"重复"），必须合并。
+_COLOR_NOISE_RE = re.compile(r"[\s\-_—－–·・]+")
+
+
+def color_key(color: str) -> str:
+    """颜色去重键：忽略空白 / 连字符 / # 符号 / 全半角差异。
+    只用于「判断是不是同一个颜色」，显示仍用原写法（见 splitter._color_display_names）。"""
+    s = unicodedata.normalize("NFKC", str(color or ""))
+    s = _COLOR_NOISE_RE.sub("", s)
+    s = s.replace("#", "").replace("＃", "")
+    return s.upper()
 
 
 def half_split(qty: int) -> Tuple[int, int]:
