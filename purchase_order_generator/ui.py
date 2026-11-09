@@ -129,6 +129,7 @@ def _generate_input_template() -> bytes:
     ws3.append(['申请人', '肖体桥'])
     ws3.append(['联系地址', '东莞启创-朗晨'])
     ws3.append(['采购仓库', '启创-福茂仓库'])
+    ws3.append(['店铺代码', 'Popyoung-US'])   # v40：订单页「店铺」+ 领星导入「店铺」
 
     # 配置表 - 工厂信息表（空一行后：工厂名称/联系方式/工厂地址/联系人）
     ws3.append([])
@@ -204,6 +205,13 @@ def render_purchase_order_page():
         c2.metric("账号代码", data.config.account_code)
         c3.metric("申请人", data.config.applicant)
         c4.metric("联系地址", data.config.office)
+        d1, d2 = st.columns(2)
+        d1.metric("采购仓库", data.config.warehouse or "（未填）")
+        d2.metric("店铺", data.config.shop_code or "（未填）")
+
+        if not data.config.shop_code:
+            st.warning("⚠️ 配置表没有填「店铺代码」，订单页的「店铺」和领星导入单的「店铺」列会留空。"
+                       "请在配置表键值区加一行：A=店铺代码，B=店铺名（如 Popyoung-US）")
 
         # 工厂信息匹配检查（配置表「工厂信息表」）
         if data.config.factories:
@@ -303,7 +311,7 @@ def render_purchase_order_page():
             "款号": u.style,
             "纸样编号": u.pattern,
             "工厂": u.factory,
-            "布行": "、".join(g.supplier for g in u.supplier_groups),
+            "布行": "、".join(g.supplier for g in u.supplier_groups),   # 传的是可编辑行草稿，不含品名分组
             "采购日期": u.date_str or "",
             "采购明细": "、".join(f"{cr.color}({cr.total}件)" for cr in u.color_rows),
         })
@@ -360,7 +368,9 @@ def render_purchase_order_page():
             "产品名称": u.product_name,
             "类型": u.type_str,
             "工厂": u.factory,
-            "涉及布行": "、".join(g.supplier for g in u.supplier_groups),
+            "涉及布行": "、".join(dict.fromkeys(
+                (g.sheet_title or g.supplier).replace("布料申购单-", "")
+                for g in u.supplier_groups)),
             "颜色数": len(u.color_rows),
             "总件数": u.total_qty,
             "生成文件名": u.file_name,
@@ -389,7 +399,8 @@ def render_purchase_order_page():
                 ]), use_container_width=True, hide_index=True)
             with c_right:
                 for g in u.supplier_groups:
-                    st.markdown(f"**布料申购单-{g.supplier}**（合计 {g.total_rolls} 条）")
+                    _gt = getattr(g, "sheet_title", "") or f"布料申购单-{g.supplier}"
+                    st.markdown(f"**{_gt}**（品名 {g.fabric or '—'}，合计 {g.total_rolls} 条）")
                     st.dataframe(pd.DataFrame([
                         {"颜色&色号": r.color, "数量(条)": r.rolls, "布行": r.supplier}
                         for r in g.rows
@@ -426,7 +437,7 @@ def render_purchase_order_page():
         st.markdown("### 📋 输入格式说明")
         st.markdown("**Sheet1 主表**：款号 / SKU编码 / SKU名称 / 颜色 / 尺码 / 采购数 / 工厂 / 布行 / **品名(写入申购单)** / 重量(选填) / 备注")
         st.markdown("**Sheet2 面料表**：款号 / 产品名称 / 品名 / 纸样名称 / 洗水唛成分 / 每条布出货数(件) / 是否需要压缩袋 / 包装袋规格")
-        st.markdown("**Sheet3 配置表**：品牌 / 账号代码 / 申请人 / 联系地址 / 采购仓库（下拉）"
+        st.markdown("**Sheet3 配置表**：品牌 / 账号代码 / 申请人 / 联系地址 / 采购仓库（下拉）/ **店铺代码**"
                     " + **工厂信息表**（A7 起：工厂名称 / 联系方式 / 工厂地址 / 联系人）")
         st.divider()
         st.markdown("### ⚙️ 规则要点")
