@@ -43,9 +43,11 @@ class SupplierSheetRow:
 @dataclass
 class SupplierGroup:
     supplier: str
-    fabric: str                      # 款级品名（主表 I 列，直接写入布料申购单「品名」）
+    fabric: str                      # 品名（主表 I 列，直接写入布料申购单「品名」）
     weight: str = ""                 # 重量（保留字段，暂不输出）
     rows: List[SupplierSheetRow] = field(default_factory=list)
+    # v39：工作表名。同一布行在该款下有多种品名时带品名后缀，如「布料申购单-剑邑布行(丝光棉)」
+    sheet_title: str = ""
 
     @property
     def total_rolls(self) -> int:
@@ -191,7 +193,8 @@ def split(data: InputData, mixed_overrides: Dict[str, int] = None) -> SplitResul
             wash_label=fi.wash_label if fi else "",
             wash_components=fi.wash_components if fi else [],
             factory=factory,
-            fabric=fi.fabric if fi else (skus[0].fabric if skus else ""),
+            # v39：品名以主表每行的 I 列为准（同一款可能部分用牛奶丝、部分用丝光棉）
+            fabric=next((s.fabric for s in skus if s.fabric), "") or (fi.fabric if fi else ""),
             need_bag=fi.need_bag if fi else False,
             bag_spec=fi.bag_spec if fi else "",
             type_str=classify_type([s.sku_name for s in skus]),
@@ -217,22 +220,26 @@ def split(data: InputData, mixed_overrides: Dict[str, int] = None) -> SplitResul
                 color_remark.setdefault(disp, set()).add(sr.remark)
 
         # 4. 申购条目（按 SKU 行拆，混搭拆两半）
-        #    entry = (supplier, color, qty, original_color)
-        entries: List[Tuple[str, str, int, str]] = []
-        # v32: 布行 → 重量（可选，保留不输出）
-        supplier_meta: Dict[str, List[str]] = {}   # supplier -> [weight]
+        #    v39：entry 增加「品名」维度 —— 同一款下不同 SKU 可能用不同面料（牛奶丝/丝光棉），
+        #    申购单要按「布行 + 品名」分开出，品名取主表每行的 I 列
+        #    entry = (supplier, fabric, color, qty, original_color)
+        entries: List[Tuple[str, str, str, int, str]] = []
+        # (supplier, fabric) → [weight]（可选，保留不输出）
+        supplier_meta: Dict[Tuple[str, str], List[str]] = {}
 
-        def _collect_meta(sup: str, sr: SKURow):
+        def _collect_meta(sup: str, fab: str, sr: SKURow):
             if not sup:
                 return
-            if sup not in supplier_meta:
-                supplier_meta[sup] = [""]
-            cur = supplier_meta[sup]
+            key = (sup, fab)
+            if key not in supplier_meta:
+                supplier_meta[key] = [""]
+            cur = supplier_meta[key]
             if not cur[0] and sr.weight:
                 cur[0] = sr.weight
 
         for sr in skus:
             q = max(sr.qty, 0)
+            fab = (sr.fabric or unit.fabric or "").strip()
             if is_mixed_color(sr.color):
                 s1, s2 = _supplier_parts(sr)
                 q1 = mixed_overrides.get(sr.sku)
@@ -244,13 +251,13 @@ def split(data: InputData, mixed_overrides: Dict[str, int] = None) -> SplitResul
                 p1, p2 = split_mixed_color(sr.color)
                 p1 = alias.get(color_key(p1), p1)      # 统一写法（3#黑色 → #3 黑色）
                 p2 = alias.get(color_key(p2), p2)
-                entries.append((s1, p1, q1, sr.color))
-                _collect_meta(s1, sr)
+                entries.append((s1, fab, p1, q1, sr.color))
+                _collect_meta(s1, fab, sr)
                 if q2:
                     # 混搭色必须配 2 个布行（每个颜色各 1 条布）；若漏填，后段归到同一布行，
                     # 保证件数不丢（正常流程在 validate() 已阻断并提示修正）
-                    entries.append((s2 or s1, p2, q2, sr.color))
-                    _collect_meta(s2 or s1, sr)
+                    entries.append((s2 or s1, fab, p2, q2, sr.color))
+                    _collect_meta(s2 or s1, fab, sr)
                 result.mixed_splits.append({
                     "order_no": unit.order_no, "style": style, "factory": factory,
                     "original_color": sr.color, "sku": sr.sku,
@@ -259,24 +266,38 @@ def split(data: InputData, mixed_overrides: Dict[str, int] = None) -> SplitResul
                     "supplier1": s1, "supplier2": s2,
                 })
             else:
-                entries.append((sr.supplier, _disp_color(sr.color, alias), q, sr.color))
-                _collect_meta(sr.supplier, sr)
+                entries.append((sr.supplier, fab, _disp_color(sr.color, alias), q, sr.color))
+                _collect_meta(sr.supplier, fab, sr)
 
-        # 5. 布行聚合
-        supplier_agg: Dict[str, Dict[str, int]] = {}
-        for sup, color, q, _orig in entries:
-            supplier_agg.setdefault(sup, {})
-            supplier_agg[sup][color] = supplier_agg[sup].get(color, 0) + q
+        # 5. 布行 + 品名 聚合（同一布行不同品名会分成两张申购单）
+        supplier_agg: Dict[Tuple[str, str], Dict[str, int]] = {}
+        for sup, fab, color, q, _orig in entries:
+            key = (sup, fab)
+            supplier_agg.setdefault(key, {})
+            supplier_agg[key][color] = supplier_agg[key].get(color, 0) + q
 
         pcs = fi.pcs_per_roll if fi else 40
 
-        # 6. 生成申购单分组
-        for sup in sorted(supplier_agg.keys(), key=lambda x: list(supplier_agg.keys()).index(x)):
-            wt = supplier_meta.get(sup, [""])[0]
-            group = SupplierGroup(supplier=sup, fabric=unit.fabric, weight=wt)
-            for color, q in supplier_agg[sup].items():
-                group.rows.append(SupplierSheetRow(color=color, qty=q, rolls=rolls(q, pcs), supplier=sup))
+        # 6. 生成申购单分组（布行/品名 按首次出现顺序；组内颜色按条数倒序）
+        for (sup, fab), color_map in supplier_agg.items():
+            wt = supplier_meta.get((sup, fab), [""])[0]
+            group = SupplierGroup(supplier=sup, fabric=fab, weight=wt)
+            rows = [SupplierSheetRow(color=c, qty=q, rolls=rolls(q, pcs), supplier=sup)
+                    for c, q in color_map.items()]
+            # v39：颜色数量倒序（主看条数，条数相同再看件数，都相同保持输入顺序）
+            rows.sort(key=lambda r: (-r.rolls, -r.qty))
+            group.rows = rows
             unit.supplier_groups.append(group)
+
+        # 6b. 工作表名：同一布行有多种品名时带品名后缀，避免 sheet 重名
+        sup_count: Dict[str, int] = {}
+        for g in unit.supplier_groups:
+            sup_count[g.supplier] = sup_count.get(g.supplier, 0) + 1
+        for g in unit.supplier_groups:
+            if sup_count[g.supplier] > 1 and g.fabric:
+                g.sheet_title = f"布料申购单-{g.supplier}({g.fabric})"
+            else:
+                g.sheet_title = f"布料申购单-{g.supplier}"
 
         # 7. 生成订单颜色行
         #    条数算法（v34）：该行件数 ÷ 每条布出货数，各行独立、不按布行合并分配
