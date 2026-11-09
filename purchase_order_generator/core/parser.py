@@ -62,6 +62,7 @@ class Config:
     applicant: str = ""
     office: str = ""
     warehouse: str = ""   # 采购仓库（领星批量导入 + 送货清单「送货仓库」）
+    shop_code: str = ""   # 店铺代码（订单页「店铺」+ 领星批量导入「店铺」，v40）
     factories: Dict[str, FactoryInfo] = field(default_factory=dict)  # 工厂名称(全称) → 信息
 
 
@@ -282,6 +283,9 @@ CONFIG_KEYS = {
     "品牌": "brand", "账号代码": "account_code", "账号": "account_code",
     "申请人": "applicant", "联系地址": "office", "办公室": "office",
     "采购仓库": "warehouse", "仓库": "warehouse",
+    # v40：配置表新增「店铺代码」行（订单页「店铺」+ 领星导入「店铺」）
+    # 注意顺序：更长的 key 必须在前，否则「店铺代码」会被「店铺」先截走
+    "店铺代码": "shop_code", "店铺": "shop_code",
 }
 
 
