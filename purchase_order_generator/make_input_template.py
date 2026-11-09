@@ -63,7 +63,8 @@ dv_bag.add("G2:G500")
 # ============ Sheet3 配置表 ============
 ws3 = wb.create_sheet("配置表")
 config_rows = [["品牌", "POPYOUNG"], ["账号代码", "MLD-AM-US-PPY"], ["申请人", "肖体桥"],
-               ["联系地址", "东莞启创-朗晨"], ["采购仓库", "启创-立祥仓库B区"]]
+               ["联系地址", "东莞启创-朗晨"], ["采购仓库", "启创-立祥仓库B区"],
+               ["店铺代码", "Popyoung-US"]]     # v40：订单页「店铺」+ 领星导入「店铺」
 for r in config_rows:
     ws3.append(r)
 for c in range(1, 3):
@@ -76,7 +77,7 @@ ws3.column_dimensions["B"].width = 26
 dv_wh = DataValidation(type="list", formula1='"启创-利得仓库,启创-福茂仓库,启创-立祥仓库A区,启创-立祥仓库B区"',
                        allow_blank=True)
 ws3.add_data_validation(dv_wh)
-dv_wh.add("B5:B500")
+dv_wh.add("B5:B5")      # 只给「采购仓库」这一行挂下拉（店铺代码在第 6 行，不能有仓库下拉）
 
 wb.save(OUT)
 print("输入模板已生成:", OUT)
