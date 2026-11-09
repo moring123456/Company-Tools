@@ -78,6 +78,14 @@ dv_wh = DataValidation(type="list", formula1='"启创-利得仓库,启创-福茂
                        allow_blank=True)
 ws3.add_data_validation(dv_wh)
 dv_wh.add("B5:B5")      # 只给「采购仓库」这一行挂下拉（店铺代码在第 6 行，不能有仓库下拉）
+# 店铺下拉（领星店铺枚举，与 templates/input_template.xlsx 保持一致）
+dv_shop = DataValidation(
+    type="list",
+    formula1='"Anyhold-US,Aodemo-US,Bestbee-US,Cathy-US,Enjoysoul-US,Netsmile-US,Popyoung-US,syoss-US"',
+    allow_blank=True,
+)
+ws3.add_data_validation(dv_shop)
+dv_shop.add("B6:B6")
 
 wb.save(OUT)
 print("输入模板已生成:", OUT)
