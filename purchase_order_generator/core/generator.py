@@ -478,6 +478,7 @@ def _build_order_sheet(wb, unit: OrderUnit):
     ws["B3"] = unit.order_no       # 订单号
     ws["H3"] = unit.config_brand   # 品牌
     ws["B4"] = unit.pattern        # 做货纸样编号
+    ws["H4"] = getattr(unit, "config_shop_code", "")   # 店铺（配置表「店铺代码」，v40）
     ws["B5"] = unit.factory        # 加工厂
     _write_date_cell(ws, 5, 8, unit.date_str)  # H5 日期，显示 YYYY/M/D（如 2026/9/2，单数字月/日不补 0）
 
@@ -619,12 +620,14 @@ def _std_cell(ws, row, col, value=None, size=11, bold=False, wrap=None,
 
 
 def _build_supplier_sheet(wb, unit: OrderUnit, group):
-    """布料申购单（v32 布局）：
+    """布料申购单（v39 布局，格式对齐用户确认过的示范文件）：
     R1 标题 / R2 订单号·款号 / R3 品名·代加工工厂 / R4 联系人·联系电话 / R5 联系地址
-    R6 表头 / R7~ 数据行(至少14行) / 合计行 / 申请人行
+    R6 表头 / R7~ 数据行（有几色就几行，不补空行，颜色按条数倒序）/ 合计行 / 申请人行
     配色：标题带 T4/0.4 深一档，正文 T4/0.8 浅蓝，需核对的值用红字。
+    品名取主表 I 列（同一款可能有牛奶丝/丝光棉，按「布行+品名」各出一张）。
     """
-    ws = wb.create_sheet(title=f"布料申购单-{group.supplier}")
+    title = getattr(group, "sheet_title", "") or f"布料申购单-{group.supplier}"
+    ws = wb.create_sheet(title=title)
 
     for col, w in {"A": 21.875, "B": 23.5, "C": 11.875, "D": 30.875}.items():
         ws.column_dimensions[col].width = w
@@ -665,17 +668,17 @@ def _build_supplier_sheet(wb, unit: OrderUnit, group):
         _std_cell(ws, 6, i, head, size=12 if i <= 2 else 11, bold=True, wrap=True, fill=FILL_BODY)
     ws.row_dimensions[6].height = 27.0
 
-    # 数据行（至少 14 行，R7 起）
+    # 数据行（有几色就几行，不补空行；A/B 列 12 号粗体，C/D 列 11 号常规，行高 27）
     data_start = 7
-    need = max(len(group.rows), 14)
+    need = max(len(group.rows), 1)
     for i in range(need):
         r = data_start + i
-        ws.row_dimensions[r].height = 21.0 if i >= 3 else 27.0
+        ws.row_dimensions[r].height = 27.0
         sr = group.rows[i] if i < len(group.rows) else None
-        _std_cell(ws, r, 1, sr.color if sr else None, bold=True, fill=FILL_BODY)
-        _std_cell(ws, r, 2, sr.rolls if sr else None, size=14, bold=True, fill=FILL_BODY)
-        _std_cell(ws, r, 3, sr.supplier if sr else None, fill=FILL_BODY)
-        _std_cell(ws, r, 4, unit.config_account_code if sr else None, fill=FILL_BODY)
+        _std_cell(ws, r, 1, sr.color if sr else None, size=12, bold=True, wrap=True, fill=FILL_BODY)
+        _std_cell(ws, r, 2, sr.rolls if sr else None, size=12, bold=True, wrap=True, fill=FILL_BODY)
+        _std_cell(ws, r, 3, sr.supplier if sr else None, size=11, wrap=True, fill=FILL_BODY)
+        _std_cell(ws, r, 4, unit.config_account_code if sr else None, size=11, wrap=True, fill=FILL_BODY)
 
     last_data = data_start + need - 1
     total_row = last_data + 1
@@ -685,9 +688,9 @@ def _build_supplier_sheet(wb, unit: OrderUnit, group):
               wrap=True, fill=FILL_BODY, color=RED_FONT)
     _std_cell(ws, total_row, 3, "办公室", size=12, bold=True, wrap=True, fill=FILL_BODY)
     _std_cell(ws, total_row, 4, unit.config_office, size=12, bold=True, wrap=True, fill=FILL_BODY)
-    ws.row_dimensions[total_row].height = 18.0
+    ws.row_dimensions[total_row].height = 28.0
 
-    # 申请人行
+    # 申请人行（11 号常规，不换行）
     app_row = total_row + 1
     _std_cell(ws, app_row, 1, "申请人", fill=FILL_BODY)
     _std_cell(ws, app_row, 2, unit.config_applicant, fill=FILL_BODY)
@@ -695,7 +698,7 @@ def _build_supplier_sheet(wb, unit: OrderUnit, group):
     _std_cell(ws, app_row, 4, fill=FILL_BODY)
     _write_date_cell(ws, app_row, 4, unit.date_str)   # 显示 YYYY/M/D（单数字不补 0）
     ws.cell(row=app_row, column=4).fill = FILL_BODY
-    ws.row_dimensions[app_row].height = 16.5
+    ws.row_dimensions[app_row].height = 29.0
     # 注：布料申购单不需要打印，故不做打印设置（按用户要求保持原样）
     return ws
 
@@ -876,7 +879,16 @@ def build_summary(split_result: SplitResult, date_str: str, out_dir: str) -> str
     headers1 = ["订单号", "款号", "产品名称", "类型", "工厂", "涉及布行", "颜色数", "总件数", "布料总条数", "生成文件名"]
     ws1.append(headers1)
     for u in split_result.units:
-        suppliers = "、".join(g.supplier for g in u.supplier_groups)
+        # v39：同一布行可能有两种品名（两张申购单），这里去重显示，同名布行后面补品名
+        sup_cnt = {}
+        for g in u.supplier_groups:
+            sup_cnt[g.supplier] = sup_cnt.get(g.supplier, 0) + 1
+        labels = []
+        for g in u.supplier_groups:
+            lab = f"{g.supplier}({g.fabric})" if sup_cnt[g.supplier] > 1 and g.fabric else g.supplier
+            if lab not in labels:
+                labels.append(lab)
+        suppliers = "、".join(labels)
         ws1.append([u.order_no, u.style, u.product_name, u.type_str, u.factory,
                     suppliers, len(u.color_rows), u.total_qty,
                     sum(g.total_rolls for g in u.supplier_groups), u.file_name])
@@ -915,6 +927,7 @@ def generate_all(data: InputData, split_result: SplitResult, out_dir: str) -> Li
         unit.config_account_code = data.config.account_code
         unit.config_office = data.config.office
         unit.config_warehouse = data.config.warehouse
+        unit.config_shop_code = data.config.shop_code     # 店铺（配置表「店铺代码」）
         unit.date_str = date_str
         unit.images = data.images   # 输入文件「图片」sheet 的图（可能为空 → 用默认）
         # 复制 THD 模板
