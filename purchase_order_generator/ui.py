@@ -13,6 +13,7 @@ import streamlit as st
 import openpyxl
 from openpyxl.utils import get_column_letter
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+from openpyxl.worksheet.datavalidation import DataValidation
 
 # 双兼容导入：平台集成(包上下文) / 独立运行(脚本目录)
 try:
@@ -130,6 +131,14 @@ def _generate_input_template() -> bytes:
     ws3.append(['联系地址', '东莞启创-朗晨'])
     ws3.append(['采购仓库', '启创-福茂仓库'])
     ws3.append(['店铺代码', 'Popyoung-US'])   # v40：订单页「店铺」+ 领星导入「店铺」
+    _shop_row = ws3.max_row                   # v41：店铺下拉（与 templates/input_template.xlsx 的枚举一致）
+    dv_shop = DataValidation(
+        type='list',
+        formula1='"Anyhold-US,Aodemo-US,Bestbee-US,Cathy-US,Enjoysoul-US,Netsmile-US,Popyoung-US,syoss-US"',
+        allow_blank=True,
+    )
+    ws3.add_data_validation(dv_shop)
+    dv_shop.add(f'B{_shop_row}')
 
     # 配置表 - 工厂信息表（空一行后：工厂名称/联系方式/工厂地址/联系人）
     ws3.append([])
