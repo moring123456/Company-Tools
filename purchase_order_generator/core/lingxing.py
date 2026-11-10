@@ -10,6 +10,14 @@
 - 采购仓库(W) = 配置表「采购仓库」
 - SKU(Y) = 主表 SKU编码, 实际采购量(AE) = 采购数
 - 其余列一律留空（模板示例留空的字段不填）
+
+模板版本（v42，领星 2026-11 导出版）:
+- 共 37 列 A~AK（旧版 36 列 A~AJ）
+- AJ(36) = 采购备注（领星新增，本工具留空）
+- AK(37) = 更新报价（旧版在 AJ，本工具留空）
+- 本文件用到的列全部在 1~32 之间，故列号无需随版本改动；
+  领星若再增列且不改动 A~AF，只需用
+  采购单测试/make_lingxing_template.py 重新精简新导出的模板即可。
 """
 import os
 from typing import Dict, List, Tuple
@@ -27,6 +35,13 @@ COL_ID, COL_ORDER_NO, COL_SUPPLIER, COL_TAX, COL_FEE, COL_CURRENCY, COL_WAREHOUS
     1, 2, 3, 12, 13, 14, 23, 25, 26, 31, 32
 # 含税单价 = AF(32)，填占位符 {{供应商报价}}（由运营在领星导入时手动填入实际报价）
 # Z(26) = 店铺，取配置表「店铺代码」（v40）
+
+# v43：币种相关列
+COL_FREIGHT_CUR = 17    # Q 运费币种
+COL_OTHER_CUR = 19      # S 其他费用币种
+PURCHASE_CURRENCY = "CNY"
+# 领星模板批注 Q2：采购币种为 CNY 时，运费币种必须为 CNY
+# （S2 同句：采购币种为 CNY 时，其他费用币种必须为 CNY）
 
 
 def build_lingxing(data: InputData, split_result: SplitResult, out_dir: str) -> str:
@@ -54,7 +69,9 @@ def build_lingxing(data: InputData, split_result: SplitResult, out_dir: str) -> 
         ws.cell(row=r, column=COL_SUPPLIER, value=f"{sr.factory}工厂")
         ws.cell(row=r, column=COL_TAX, value="否")
         ws.cell(row=r, column=COL_FEE, value="不分配")
-        ws.cell(row=r, column=COL_CURRENCY, value="CNY")
+        ws.cell(row=r, column=COL_CURRENCY, value=PURCHASE_CURRENCY)
+        # v43：采购币种为 CNY 时，运费币种必须为 CNY（领星模板 Q 列批注的强制规则）
+        ws.cell(row=r, column=COL_FREIGHT_CUR, value=PURCHASE_CURRENCY)
         ws.cell(row=r, column=COL_WAREHOUSE, value=data.config.warehouse)
         ws.cell(row=r, column=COL_SKU, value=sr.sku)
         ws.cell(row=r, column=COL_SHOP, value=data.config.shop_code)   # Z 店铺（v40）
