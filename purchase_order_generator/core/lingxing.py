@@ -70,8 +70,9 @@ def build_lingxing(data: InputData, split_result: SplitResult, out_dir: str) -> 
         ws.cell(row=r, column=COL_TAX, value="否")
         ws.cell(row=r, column=COL_FEE, value="不分配")
         ws.cell(row=r, column=COL_CURRENCY, value=PURCHASE_CURRENCY)
-        # v43：采购币种为 CNY 时，运费币种必须为 CNY（领星模板 Q 列批注的强制规则）
+        # v43/v44：采购币种为 CNY 时，运费币种与其他费用币种都必须为 CNY（领星 Q/S 列批注的强制规则）
         ws.cell(row=r, column=COL_FREIGHT_CUR, value=PURCHASE_CURRENCY)
+        ws.cell(row=r, column=COL_OTHER_CUR, value=PURCHASE_CURRENCY)
         ws.cell(row=r, column=COL_WAREHOUSE, value=data.config.warehouse)
         ws.cell(row=r, column=COL_SKU, value=sr.sku)
         ws.cell(row=r, column=COL_SHOP, value=data.config.shop_code)   # Z 店铺（v40）
