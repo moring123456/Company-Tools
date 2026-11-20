@@ -19,6 +19,7 @@ from .calc import SIZE_ORDER, is_mixed_color, split_suppliers
 
 @dataclass
 class SKURow:
+    seq: str = ""            # 序号（主表 A 列，v45）：一个序号 = 一张订单；留空则按 款号×工厂 自动分单
     style: str = ""
     sku: str = ""
     sku_name: str = ""
@@ -31,6 +32,7 @@ class SKURow:
     weight: str = ""         # 重量（保留，可选列，暂不输出）
     remark: str = ""
     row_no: int = 0          # 输入表行号（报错定位用）
+    unit_no: str = ""        # 由 splitter 回填：该行归属的订单号（领星标识号等下游用）
 
 
 @dataclass
@@ -102,6 +104,7 @@ def _find_sheet(wb, keywords: List[str], fallback_idx: int):
 
 MAIN_HEADER_MAP = {
     # ⚠️ 更具体的列名必须放在前面（匹配用 `key in 表头`，先命中者生效）
+    "序号": "seq",
     "款号": "style", "sku编码": "sku", "sku名称": "sku_name", "颜色": "color",
     "尺码": "size", "采购数": "qty", "采购数量": "qty", "采购": "qty",
     "工厂": "factory", "加工厂": "factory", "布行": "supplier",
@@ -152,6 +155,7 @@ def _parse_main(ws, errors: List[Tuple[int, str, str, str]]) -> List[SKURow]:
         except (ValueError, TypeError):
             qty = -1
         sr = SKURow(
+            seq=row_vals.get("seq", ""),
             style=row_vals.get("style", ""), sku=row_vals.get("sku", ""),
             sku_name=row_vals.get("sku_name", ""), color=row_vals.get("color", ""),
             size=row_vals.get("size", ""), qty=qty, factory=row_vals.get("factory", ""),
