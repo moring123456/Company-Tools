@@ -53,19 +53,19 @@ def build_lingxing(data: InputData, split_result: SplitResult, out_dir: str) -> 
         for cell in row:
             cell.value = None
 
-    # 2. 建立 (款号, 工厂) -> 标识号 映射（与订单号序号一致）
-    id_map: Dict[Tuple[str, str], int] = {}
-    order_no_map: Dict[Tuple[str, str], str] = {}
+    # 2. 建立 订单号 -> 标识号 映射（与订单号序号一致）
+    #    v45：改用订单号做键。原来用 (款号,工厂) 做键，同款同工厂分两个序号时
+    #         会算成同一个标识号，两张采购单被领星合并成一张。
+    id_by_order: Dict[str, int] = {}
     for i, u in enumerate(split_result.units, 1):
-        id_map[(u.style, u.factory)] = i
-        order_no_map[(u.style, u.factory)] = u.order_no
+        id_by_order[u.order_no] = i
 
     # 3. 填数据（每行一个 SKU）
     r = 3
     for sr in data.rows:
-        key = (sr.style, sr.factory)
-        ws.cell(row=r, column=COL_ID, value=id_map.get(key, 1))
-        ws.cell(row=r, column=COL_ORDER_NO, value=order_no_map.get(key, ""))
+        oid = sr.unit_no or ""
+        ws.cell(row=r, column=COL_ID, value=id_by_order.get(oid, 1))
+        ws.cell(row=r, column=COL_ORDER_NO, value=oid)
         ws.cell(row=r, column=COL_SUPPLIER, value=f"{sr.factory}工厂")
         ws.cell(row=r, column=COL_TAX, value="否")
         ws.cell(row=r, column=COL_FEE, value="不分配")
