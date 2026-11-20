@@ -17,6 +17,39 @@ from cost_new import run_cost_calculation, export_excel
 st.set_page_config(page_title="公司数据处理平台", layout="wide")
 st.title("📊 自动化计算工具平台")
 
+# ---------- 更新公示栏 ----------
+# 每次打开网站弹一次；点「知道了」后本次会话不再打扰，下次有新更新才会再弹
+from changelog import latest as _latest_updates, rest as _older_updates, latest_version as _latest_ver
+
+
+@st.dialog("🆕 更新公告")
+def _show_update_notice():
+    _news = _latest_updates()
+    for _i, _up in enumerate(_news):
+        st.markdown(f"**{_up['date']}　{_up['title']}**")
+        for _it in _up["items"]:
+            st.markdown(f"- {_it}")
+        if _i < len(_news) - 1:
+            st.divider()
+
+    _older = _older_updates()
+    if _older:
+        with st.expander(f"查看更早的 {len(_older)} 次更新"):
+            for _up in _older:
+                st.markdown(f"**{_up['date']}　{_up['title']}**")
+                for _it in _up["items"]:
+                    st.markdown(f"- {_it}")
+
+    st.write("")
+    if st.button("知道了", use_container_width=True, type="primary", key="notice_ok"):
+        st.session_state["_notice_seen_" + _latest_ver()] = True
+        st.rerun()
+
+
+_notice_key = "_notice_seen_" + _latest_ver()
+if _latest_ver() and not st.session_state.get(_notice_key):
+    _show_update_notice()
+
 st.sidebar.title("工具菜单")
 menu_choice = st.sidebar.radio(
     "请选择你需要使用的功能：",
