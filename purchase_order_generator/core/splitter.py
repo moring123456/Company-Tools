@@ -66,6 +66,7 @@ class OrderUnit:
     need_bag: bool
     bag_spec: str
     type_str: str
+    seq: str = ""                    # v45：主表「序号」列原值（未填序号时 = 自动序号）
     date_str: str = ""               # 文件名中的 8 位日期段 (从输入文件名提取, ui 可编辑)
     wash_components: List[str] = field(default_factory=list)   # 洗水唛成分列表（按行）
     sizes: List[str] = field(default_factory=list)
@@ -88,6 +89,8 @@ class SplitResult:
     mixed_splits: List[Dict] = field(default_factory=list)   # 混搭拆分明细(预览用)
     # 颜色写法自动合并明细(预览用)：同一颜色在输入表里有多种写法时会被并成一个
     color_merges: List[Dict] = field(default_factory=list)
+    # v45：序号列相关错误（有值时 UI 应阻断生成，让用户先改输入表）
+    errors: List[str] = field(default_factory=list)
 
 
 # ---------- 工具 ----------
@@ -160,25 +163,80 @@ def split(data: InputData, mixed_overrides: Dict[str, int] = None) -> SplitResul
     result = SplitResult()
     date_str = _extract_date(data.input_filename)
 
-    # 1. 按 (款号, 工厂) 分组，保持首次出现顺序
-    order: List[Tuple[str, str]] = []
-    groups: Dict[Tuple[str, str], List[SKURow]] = {}
-    for sr in data.rows:
-        key = (sr.style, sr.factory)
+    # 1. 分组
+    #    v45：主表「序号」列 —— 一个序号 = 一张订单（同一款的同色可分给不同工厂/不同批次）
+    #    · 有行填了序号 → 按序号分组；空序号行、同序号多款号/多工厂 都报错阻断
+    #    · 整列留空     → 退回「款号 × 工厂」自动分单（老模板行为不变）
+    seq_list = [(sr.seq or "").strip() for sr in data.rows]
+    use_seq = any(seq_list)
+
+    if use_seq:
+        blank_rows = [str(sr.row_no) for sr, q in zip(data.rows, seq_list) if not q]
+        if blank_rows:
+            shown = "、".join(blank_rows[:8]) + ("…" if len(blank_rows) > 8 else "")
+            result.errors.append(
+                f"主表「序号」列只填了一部分：第 {shown} 行是空的。"
+                "请给每一行都填序号，或者把整列留空（留空则按 款号+工厂 自动分单）。")
+
+        seq_meta: Dict[str, Dict[str, set]] = {}
+        for sr, q in zip(data.rows, seq_list):
+            if not q:
+                continue
+            m = seq_meta.setdefault(q, {"style": set(), "factory": set()})
+            m["style"].add(sr.style)
+            m["factory"].add(sr.factory)
+        for q in sorted(seq_meta, key=lambda x: (0, float(x)) if x.replace(".", "", 1).isdigit() else (1, 0)):
+            m = seq_meta[q]
+            if len(m["style"]) > 1:
+                result.errors.append(
+                    f"序号 {q} 下出现了多个款号（{'、'.join(sorted(m['style']))}）。"
+                    "一个序号只能对应一个款号；同款不同工厂请使用不同序号。")
+            if len(m["factory"]) > 1:
+                result.errors.append(
+                    f"序号 {q} 下出现了多个工厂（{'、'.join(sorted(m['factory']))}）。"
+                    "一个序号只能对应一个工厂；同款不同工厂请使用不同序号。")
+
+    order: List[Tuple] = []
+    groups: Dict[Tuple, List[SKURow]] = {}
+    for sr, q in zip(data.rows, seq_list):
+        if use_seq:
+            key = ("SEQ", q) if q else ("AUTO", sr.style, sr.factory)
+        else:
+            key = ("AUTO", sr.style, sr.factory)
         if key not in groups:
             groups[key] = []
             order.append(key)
         groups[key].append(sr)
 
-    # 2. 订单号序号
-    seq_by_key = {k: i + 1 for i, k in enumerate(order)}
+    # 2. 订单顺序 + 订单号序号
+    #    序号模式：按用户序号数值升序（1,2,10），未填序号的分组排最后
+    if use_seq:
+        def _ord_key(k):
+            if k[0] == "SEQ":
+                try:
+                    return (0, float(k[1]), "")
+                except (TypeError, ValueError):
+                    return (1, float("inf"), str(k[1]))
+            return (2, float("inf"), "")
+
+        order.sort(key=_ord_key)
+
+    seq_by_key: Dict[Tuple, int] = {}
+    for i, k in enumerate(order):
+        if k[0] == "SEQ":
+            try:
+                seq_by_key[k] = int(float(k[1]))
+            except (TypeError, ValueError):
+                seq_by_key[k] = i + 1
+        else:
+            seq_by_key[k] = i + 1
 
     # 2. 订单号前缀：从款号提取字母部分（ADM1003 -> ADM, PPY4005 -> PPY）
     prefix_by_style: Dict[str, str] = {}
 
     for idx, key in enumerate(order):
-        style, factory = key
         skus = groups[key]
+        style, factory = skus[0].style, skus[0].factory
         fi = data.fabrics.get(style)
 
         if style not in prefix_by_style:
@@ -198,6 +256,7 @@ def split(data: InputData, mixed_overrides: Dict[str, int] = None) -> SplitResul
             need_bag=fi.need_bag if fi else False,
             bag_spec=fi.bag_spec if fi else "",
             type_str=classify_type([s.sku_name for s in skus]),
+            seq=(key[1] if key[0] == "SEQ" else str(seq_by_key[key])),
             date_str=date_str,
         )
         color_qty: Dict[str, Dict[str, int]] = {}
@@ -350,6 +409,9 @@ def split(data: InputData, mixed_overrides: Dict[str, int] = None) -> SplitResul
         ]
         unit.total_qty = sum(cr.total for cr in unit.color_rows)
         unit.file_name = f"{unit.order_no}-{style} {unit.product_name} {unit.type_str} -{factory}.xlsx".replace("  ", " ")
+        # v45：把订单号回写到每一行 SKU，下游（领星标识号等）按订单而非 款×工厂 归组
+        for s in skus:
+            s.unit_no = unit.order_no
         result.units.append(unit)
 
     return result
