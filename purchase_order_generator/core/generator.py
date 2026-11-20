@@ -876,7 +876,7 @@ def build_summary(split_result: SplitResult, date_str: str, out_dir: str) -> str
     wb = openpyxl.Workbook()
     ws1 = wb.active
     ws1.title = "文件汇总"
-    headers1 = ["订单号", "款号", "产品名称", "类型", "工厂", "涉及布行", "颜色数", "总件数", "布料总条数", "生成文件名"]
+    headers1 = ["序号", "订单号", "款号", "产品名称", "类型", "工厂", "涉及布行", "颜色数", "总件数", "布料总条数", "生成文件名"]
     ws1.append(headers1)
     for u in split_result.units:
         # v39：同一布行可能有两种品名（两张申购单），这里去重显示，同名布行后面补品名
@@ -889,7 +889,7 @@ def build_summary(split_result: SplitResult, date_str: str, out_dir: str) -> str
             if lab not in labels:
                 labels.append(lab)
         suppliers = "、".join(labels)
-        ws1.append([u.order_no, u.style, u.product_name, u.type_str, u.factory,
+        ws1.append([getattr(u, "seq", ""), u.order_no, u.style, u.product_name, u.type_str, u.factory,
                     suppliers, len(u.color_rows), u.total_qty,
                     sum(g.total_rolls for g in u.supplier_groups), u.file_name])
 
