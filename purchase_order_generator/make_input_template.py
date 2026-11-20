@@ -17,29 +17,31 @@ wb = openpyxl.Workbook()
 # ============ Sheet1 主表 ============
 ws = wb.active
 ws.title = "主表"
-headers1 = ["款号", "SKU编码", "SKU名称", "颜色", "尺码", "采购数", "工厂", "布行", "品名", "备注"]
+# v45：最左侧新增「序号」列 —— 一个序号 = 一张订单（同款同色可分给不同工厂）
+headers1 = ["序号", "款号", "SKU编码", "SKU名称", "颜色", "尺码", "采购数", "工厂", "布行", "品名", "备注"]
 ws.append(headers1)
 sample_rows = [
-    ["PPY4005", "PPY4005-YH-2143", "PPY4005-YH 亨利领睡衣套装 印花", "HX214 雪花红底", "L", 10, "嘉品", "剑邑布行", "牛奶丝", "新颜色"],
-    ["PPY4005", "PPY4005-HD-0103", "PPY4005-YH 亨利领睡衣套装 混搭", "#179 海军蓝+YH5126 棕蓝格子", "L", 10, "嘉品", "剑邑布行,宏裕布行", "牛奶丝", "混搭色布行填2个: 逗号/空格/分号均可"],
+    [1, "PPY4005", "PPY4005-YH-2143", "PPY4005-YH 亨利领睡衣套装 印花", "HX214 雪花红底", "L", 10, "嘉品", "剑邑布行", "牛奶丝", "新颜色"],
+    [1, "PPY4005", "PPY4005-HD-0103", "PPY4005-YH 亨利领睡衣套装 混搭", "#179 海军蓝+YH5126 棕蓝格子", "L", 10, "嘉品", "剑邑布行,宏裕布行", "牛奶丝", "混搭色布行填2个: 逗号/空格/分号均可"],
+    [2, "PPY4005", "PPY4005-YH-2143", "PPY4005-YH 亨利领睡衣套装 印花", "HX214 雪花红底", "XL", 10, "媛媛", "剑邑布行", "牛奶丝", "同款同色分给另一家工厂 → 换一个序号"],
 ]
 for r in sample_rows:
     ws.append(r)
 # 表头样式
-for c in range(1, 11):
+for c in range(1, 12):
     cell = ws.cell(row=1, column=c)
     cell.fill = HEADER_FILL
     cell.font = HEADER_FONT
     cell.alignment = CENTER
     cell.border = BOX
 # 列宽
-widths = [12, 22, 34, 26, 8, 9, 10, 22, 12, 14]
+widths = [8, 12, 22, 34, 26, 8, 9, 10, 22, 12, 14]
 for i, w in enumerate(widths, 1):
     ws.column_dimensions[openpyxl.utils.get_column_letter(i)].width = w
 # 尺码下拉 S~6XL
 dv_size = DataValidation(type="list", formula1='"S,M,L,XL,2XL,3XL,4XL,5XL,6XL"', allow_blank=True)
 ws.add_data_validation(dv_size)
-dv_size.add("E2:E500")
+dv_size.add("F2:F500")   # v45：尺码列右移一列
 # 示例行提示
 ws["A3"].comment = None
 
